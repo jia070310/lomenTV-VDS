@@ -12,8 +12,8 @@
       "message": "系统维护通知：2月19日凌晨2点-4点维护",
       "textColor": "#FF6B6B",
       "scrollSpeed": 40,
-      "startTime": ,
-      "endTime": ,
+      "startTime": null,
+      "endTime": null,
       "enabled": true
     }
   ]
