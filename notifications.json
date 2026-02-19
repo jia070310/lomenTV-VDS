@@ -1,15 +1,20 @@
 {
-  "version": 1,
-  "enabled": true,
-  "title": "欢迎使用柠檬TV",
-  "message": "这是一个示例通知消息。您可以通过修改 GitHub 仓库中的 notifications.json 文件来更新通知内容。",
-  "type": "info",
-  "priority": "normal",
-  "dismissible": true,
-  "startTime": null,
-  "endTime": null,
-  "action": {
-    "text": "查看仓库",
-    "url": "https://github.com/jia070310/lomenTV-VDS"
-  }
+  "notifications": [
+    {
+      "id": "welcome_2024",
+      "message": "欢迎使用柠檬TV！",
+      "textColor": "#FFD700",
+      "scrollSpeed": 50,
+      "enabled": true
+    },
+    {
+      "id": "maintenance",
+      "message": "系统维护通知：2月19日凌晨2点-4点维护",
+      "textColor": "#FF6B6B",
+      "scrollSpeed": 40,
+      "startTime": ,
+      "endTime": ,
+      "enabled": true
+    }
+  ]
 }
