@@ -5,7 +5,7 @@
       "message": "欢迎使用柠檬TV！",
       "textColor": "#FFD700",
       "scrollSpeed": 50,
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "maintenance",
