@@ -14,7 +14,7 @@
       "scrollSpeed": 40,
       "startTime": null,
       "endTime": null,
-      "enabled": true
+      "enabled": false
     }
   ]
 }
