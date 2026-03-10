@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.LomenTV" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/background_dark</item>
+        <item name="android:colorBackground">@color/background_dark</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <style name="Theme.LomenTV.Fullscreen" parent="Theme.LomenTV">
+        <item name="android:windowFullscreen">true</item>
+    </style>
+    
+    <style name="Theme.LomenTV.Splash" parent="Theme.LomenTV">
+        <item name="android:windowBackground">@drawable/ic_splash</item>
+    </style>
+</resources>

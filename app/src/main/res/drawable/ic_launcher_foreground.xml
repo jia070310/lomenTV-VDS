@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="400dp"
+    android:height="240dp"
+    android:viewportWidth="400"
+    android:viewportHeight="240">
+    <!-- 黄色背景 -->
+    <path
+        android:fillColor="#fddd0e"
+        android:pathData="M0,0h400v240h-400z"/>
+    <!-- 柠檬TV logo -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M200,80C166.87,80 140,106.87 140,140s26.87,60 60,60s60,-26.87 60,-60S233.13,80 200,80zM200,180c-22.06,0 -40,-17.94 -40,-40s17.94,-40 40,-40s40,17.94 40,40S222.06,180 200,180z"/>
+    <!-- 柠檬切片 -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M180,120l40,-20l40,20l-40,20z"/>
+    <!-- 文字 -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M160,180h80v20h-80z"/>
+</vector>

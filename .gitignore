@@ -1,0 +1,46 @@
+# Gradle files
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Log files
+*.log
+log.txt
+
+# Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Keystore files
+*.jks
+*.keystore
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Qoder specific
+.qoder/
+
+# Notification config (project specific)
+NOTIFICATIONS_CONFIG.md
+
+# Kotlin
+*.class
+*.kotlin_module
+
+# Generated files
+app/build/
+app/release/
+app/debug/

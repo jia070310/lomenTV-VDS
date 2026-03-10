@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- Background -->
+    <path
+        android:fillColor="#FF0a0a0c"
+        android:pathData="M0,0h320v180h-320z"/>
+    <!-- Circle -->
+    <path
+        android:fillColor="#FF3b82f6"
+        android:pathData="M160,40C97.6,40 48,89.6 48,152h24c0,-48.6 39.4,-88 88,-88s88,39.4 88,88h24c0,-62.4 -49.6,-112 -112,-112z"/>
+    <!-- Play triangle -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M140,100l60,40l-60,40z"/>
+</vector>

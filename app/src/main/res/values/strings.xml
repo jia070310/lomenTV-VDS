@@ -1,0 +1,48 @@
+<resources>
+    <string name="app_name">柠檬TV</string>
+    
+    <!-- Navigation -->
+    <string name="nav_home">首页</string>
+    <string name="nav_live">直播</string>
+    <string name="nav_hot">热门</string>
+    <string name="nav_library">媒体库</string>
+    <string name="nav_settings">设置</string>
+    
+    <!-- Home -->
+    <string name="recent_watching">最近观看</string>
+    <string name="tv_shows">热播电视剧</string>
+    <string name="movies">热门电影</string>
+    <string name="concerts">精彩演唱会</string>
+    <string name="variety_shows">综艺节目</string>
+    
+    <!-- Common -->
+    <string name="search">搜索</string>
+    <string name="play">播放</string>
+    <string name="pause">暂停</string>
+    <string name="resume">继续</string>
+    <string name="add_to_favorites">收藏</string>
+    <string name="remove_from_favorites">取消收藏</string>
+    <string name="episodes">剧集</string>
+    <string name="season">季</string>
+    <string name="episode">集</string>
+    
+    <!-- Player -->
+    <string name="player_error">播放错误</string>
+    <string name="player_buffering">缓冲中...</string>
+    <string name="player_loading">加载中...</string>
+    <string name="select_quality">选择画质</string>
+    <string name="select_subtitle">选择字幕</string>
+    <string name="select_audio">选择音轨</string>
+    
+    <!-- Settings -->
+    <string name="settings_account">账号设置</string>
+    <string name="settings_player">播放器设置</string>
+    <string name="settings_network">网络设置</string>
+    <string name="settings_storage">存储设置</string>
+    <string name="settings_about">关于</string>
+    
+    <!-- Quark Cloud -->
+    <string name="quark_login">夸克网盘登录</string>
+    <string name="quark_sync">同步网盘</string>
+    <string name="quark_scan_qr">请使用手机扫描二维码登录</string>
+</resources>

@@ -1,0 +1,269 @@
+package com.lomen.tv.ui.navigation
+
+import android.content.Intent
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.lomen.tv.domain.model.MediaType
+import com.lomen.tv.ui.player.PlayerActivity
+import com.lomen.tv.ui.screens.category.CategoryScreen
+import com.lomen.tv.ui.screens.detail.DetailScreen
+import com.lomen.tv.ui.screens.home.HomeScreen
+import com.lomen.tv.ui.screens.home.HomeViewModel
+import com.lomen.tv.ui.screens.home.ResourceLibraryScreen
+import com.lomen.tv.ui.screens.library.LibraryScreen
+import com.lomen.tv.ui.screens.recentwatching.RecentWatchingScreen
+import com.lomen.tv.ui.screens.search.SearchScreen
+import com.lomen.tv.ui.screens.settings.SettingsScreen
+import com.lomen.tv.ui.viewmodel.MediaSyncViewModel
+import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
+import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+sealed class Screen(val route: String) {
+    data object Home : Screen("home")
+    data object Library : Screen("library")
+    data object ResourceLibrary : Screen("resource_library")
+    data object Search : Screen("search")
+    data object Settings : Screen("settings") {
+        fun createRoute(libraryId: String? = null) = 
+            if (libraryId != null) "settings?libraryId=$libraryId" else "settings"
+    }
+    data object Detail : Screen("detail/{mediaId}") {
+        fun createRoute(mediaId: String) = "detail/$mediaId"
+    }
+    data object Player : Screen("player/{mediaId}/{episodeId}") {
+        fun createRoute(mediaId: String, episodeId: String? = null) = 
+            "player/$mediaId/${episodeId ?: "null"}"
+    }
+    data object Category : Screen("category/{mediaType}") {
+        fun createRoute(mediaType: MediaType) = "category/${mediaType.name}"
+    }
+    data object RecentWatching : Screen("recent_watching")
+}
+
+@Composable
+fun LomenTVNavigation(
+    navController: NavHostController = rememberNavController()
+) {
+    // 在NavHost级别创建共享的ViewModel
+    val sharedResourceLibraryViewModel: ResourceLibraryViewModel = hiltViewModel()
+    val sharedMediaSyncViewModel: MediaSyncViewModel = hiltViewModel()
+    
+    NavHost(
+        navController = navController,
+        startDestination = Screen.Home.route
+    ) {
+        composable(Screen.Home.route) {
+            val context = LocalContext.current
+            val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = hiltViewModel()
+            
+            HomeScreen(
+                onNavigateToDetail = { mediaId ->
+                    navController.navigate(Screen.Detail.createRoute(mediaId))
+                },
+                onNavigateToSearch = {
+                    navController.navigate(Screen.Search.route)
+                },
+                onNavigateToLibrary = {
+                    navController.navigate(Screen.ResourceLibrary.route)
+                },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route)
+                },
+                onNavigateToCategory = { mediaType ->
+                    navController.navigate(Screen.Category.createRoute(mediaType))
+                },
+                onNavigateToRecentWatching = {
+                    navController.navigate(Screen.RecentWatching.route)
+                },
+                onPlayFromHistory = { historyItem ->
+                    // 在协程中获取播放信息并启动播放器
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                        val playbackInfo = homeViewModel.getPlaybackInfo(historyItem.mediaId, historyItem.episodeId)
+                        if (playbackInfo != null && playbackInfo.videoPath != null) {
+                            val intent = Intent(context, PlayerActivity::class.java).apply {
+                                putExtra(PlayerActivity.EXTRA_VIDEO_URL, playbackInfo.videoPath)
+                                putExtra(PlayerActivity.EXTRA_TITLE, playbackInfo.title)
+                                putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, playbackInfo.episodeTitle)
+                                putExtra(PlayerActivity.EXTRA_MEDIA_ID, playbackInfo.mediaId)
+                                putExtra(PlayerActivity.EXTRA_EPISODE_ID, playbackInfo.episodeId)
+                                putExtra(PlayerActivity.EXTRA_START_POSITION, playbackInfo.startPosition)
+                            }
+                            context.startActivity(intent)
+                        }
+                    }
+                },
+                resourceLibraryViewModel = sharedResourceLibraryViewModel,
+                mediaSyncViewModel = sharedMediaSyncViewModel
+            )
+        }
+        
+        composable(Screen.Library.route) {
+            LibraryScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onNavigateToDetail = { mediaId ->
+                    navController.navigate(Screen.Detail.createRoute(mediaId))
+                }
+            )
+        }
+
+        composable(Screen.ResourceLibrary.route) {
+            val libraries = sharedResourceLibraryViewModel.resourceLibraries.collectAsState()
+            val currentLibraryId = sharedResourceLibraryViewModel.currentLibraryId.collectAsState()
+            ResourceLibraryScreen(
+                libraries = libraries.value,
+                currentLibraryId = currentLibraryId.value,
+                syncState = sharedMediaSyncViewModel.syncState.collectAsState().value,
+                syncProgress = sharedMediaSyncViewModel.syncProgress.collectAsState().value,
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onLibrarySelected = { library ->
+                    sharedResourceLibraryViewModel.setCurrentLibrary(library.id)
+                    // 触发增量同步（只刮削新增和修改的文件）
+                    sharedMediaSyncViewModel.syncLibraryIncremental(library)
+                },
+                onSyncComplete = {
+                    // 刮削完成后不自动返回，停留在资源库页面
+                },
+                onAddLibrary = {
+                    navController.navigate(Screen.Settings.route)
+                },
+                onDeleteLibrary = { library ->
+                    sharedResourceLibraryViewModel.removeLibrary(library.id)
+                },
+                onEditLibrary = { library ->
+                    // 导航到设置页面进行编辑
+                    navController.navigate(Screen.Settings.createRoute(library.id))
+                },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route)
+                }
+            )
+        }
+        
+        composable(Screen.Search.route) {
+            SearchScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onNavigateToDetail = { mediaId ->
+                    navController.navigate(Screen.Detail.createRoute(mediaId))
+                }
+            )
+        }
+        
+        composable(
+            route = "settings?libraryId={libraryId}",
+            arguments = listOf(
+                navArgument("libraryId") { 
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            val libraryId = backStackEntry.arguments?.getString("libraryId")
+            val libraryToEdit = libraryId?.let { id ->
+                sharedResourceLibraryViewModel.resourceLibraries.collectAsState().value.find { it.id == id }
+            }
+            SettingsScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                sharedResourceLibraryViewModel = sharedResourceLibraryViewModel,
+                sharedMediaSyncViewModel = sharedMediaSyncViewModel,
+                libraryToEdit = libraryToEdit
+            )
+        }
+        
+        composable(
+            route = Screen.Detail.route,
+            arguments = listOf(
+                navArgument("mediaId") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val context = LocalContext.current
+            val mediaId = backStackEntry.arguments?.getString("mediaId") ?: ""
+            DetailScreen(
+                mediaId = mediaId,
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onPlayClick = { videoUrl, title, episodeTitle, mediaId, episodeId ->
+                    // 启动播放器Activity
+                    val intent = Intent(context, PlayerActivity::class.java).apply {
+                        putExtra(PlayerActivity.EXTRA_VIDEO_URL, videoUrl)
+                        putExtra(PlayerActivity.EXTRA_TITLE, title)
+                        putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, episodeTitle)
+                        putExtra(PlayerActivity.EXTRA_MEDIA_ID, mediaId)
+                        putExtra(PlayerActivity.EXTRA_EPISODE_ID, episodeId)
+                    }
+                    context.startActivity(intent)
+                }
+            )
+        }
+        
+        composable(
+            route = Screen.Category.route,
+            arguments = listOf(
+                navArgument("mediaType") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val mediaTypeName = backStackEntry.arguments?.getString("mediaType") ?: ""
+            val mediaType = try {
+                MediaType.valueOf(mediaTypeName)
+            } catch (e: IllegalArgumentException) {
+                MediaType.MOVIE // 默认值
+            }
+            CategoryScreen(
+                mediaType = mediaType,
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onNavigateToDetail = { mediaId ->
+                    navController.navigate(Screen.Detail.createRoute(mediaId))
+                },
+                resourceLibraryViewModel = sharedResourceLibraryViewModel
+            )
+        }
+
+        composable(Screen.RecentWatching.route) {
+            val context = LocalContext.current
+            val homeViewModel: HomeViewModel = hiltViewModel()
+            RecentWatchingScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onPlayFromHistory = { historyItem ->
+                    // 在协程中获取播放信息并启动播放器
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                        val playbackInfo = homeViewModel.getPlaybackInfo(historyItem.mediaId, historyItem.episodeId)
+                        if (playbackInfo != null && playbackInfo.videoPath != null) {
+                            val intent = Intent(context, PlayerActivity::class.java).apply {
+                                putExtra(PlayerActivity.EXTRA_VIDEO_URL, playbackInfo.videoPath)
+                                putExtra(PlayerActivity.EXTRA_TITLE, playbackInfo.title)
+                                putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, playbackInfo.episodeTitle)
+                                putExtra(PlayerActivity.EXTRA_MEDIA_ID, playbackInfo.mediaId)
+                                putExtra(PlayerActivity.EXTRA_EPISODE_ID, playbackInfo.episodeId)
+                                putExtra(PlayerActivity.EXTRA_START_POSITION, playbackInfo.startPosition)
+                            }
+                            context.startActivity(intent)
+                        }
+                    }
+                }
+            )
+        }
+    }
+}

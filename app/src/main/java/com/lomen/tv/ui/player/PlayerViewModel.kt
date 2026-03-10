@@ -1,0 +1,1296 @@
+package com.lomen.tv.ui.player
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.media3.common.Player
+import com.lomen.tv.data.local.database.dao.EpisodeDao
+import com.lomen.tv.data.local.database.dao.MovieDao
+import com.lomen.tv.data.local.database.dao.WebDavMediaDao
+import com.lomen.tv.domain.model.MediaType
+import com.lomen.tv.domain.service.MediaUrlResolver
+import com.lomen.tv.domain.service.PlayerService
+import com.lomen.tv.domain.service.PlayerState
+import com.lomen.tv.domain.service.SubtitleInfo
+import com.lomen.tv.domain.service.TrackInfo
+import com.lomen.tv.domain.service.WatchHistoryService
+import com.lomen.tv.utils.FileNameParser
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class PlayerViewModel @Inject constructor(
+    private val playerService: PlayerService,
+    private val watchHistoryService: WatchHistoryService,
+    private val mediaUrlResolver: MediaUrlResolver,
+    private val episodeDao: EpisodeDao,
+    private val movieDao: MovieDao,
+    private val webDavMediaDao: WebDavMediaDao
+) : ViewModel() {
+
+    val playerState: StateFlow<PlayerState> = playerService.playerState
+    val availableSubtitles: StateFlow<List<TrackInfo>> = playerService.availableSubtitles
+    val availableAudioTracks: StateFlow<List<TrackInfo>> = playerService.availableAudioTracks
+    val selectedSubtitleIndex: StateFlow<Int> = playerService.selectedSubtitleIndex
+    val selectedAudioTrackIndex: StateFlow<Int> = playerService.selectedAudioTrackIndex
+
+    private val _isLoadingMedia = MutableStateFlow(false)
+    val isLoadingMedia: StateFlow<Boolean> = _isLoadingMedia.asStateFlow()
+
+    private val _loadError = MutableStateFlow<String?>(null)
+    val loadError: StateFlow<String?> = _loadError.asStateFlow()
+
+    private var positionUpdateJob: Job? = null
+    private var saveProgressJob: Job? = null
+
+    private var currentMediaId: String? = null
+    private var currentEpisodeId: String? = null
+
+    fun initializePlayer() {
+        playerService.initializePlayer()
+        startPositionUpdates()
+        startProgressSaving()
+    }
+
+    fun releasePlayer() {
+        // 停止自动保存，但先保存一次最终进度
+        stopProgressSaving()
+        // 保存最终进度（使用 runBlocking 确保完成）
+        saveWatchProgressSync()
+        stopPositionUpdates()
+        playerService.releasePlayer()
+    }
+    
+    private fun saveWatchProgressSync() {
+        val mediaId = currentMediaId ?: return
+        val position = playerService.getCurrentPosition()
+        val duration = playerService.getDuration()
+
+        if (duration > 0) {
+            // 使用 runBlocking 确保在 ViewModel 销毁前完成保存
+            kotlinx.coroutines.runBlocking {
+                try {
+                    watchHistoryService.saveWatchProgress(
+                        mediaId = mediaId,
+                        episodeId = currentEpisodeId,
+                        progress = position,
+                        duration = duration
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("PlayerViewModel", "Error saving watch progress synchronously", e)
+                }
+            }
+        }
+    }
+
+    fun setMediaInfo(mediaId: String, episodeId: String? = null) {
+        android.util.Log.d("PlayerViewModel", "Setting media info: mediaId=$mediaId, episodeId=$episodeId")
+        currentMediaId = mediaId
+        currentEpisodeId = episodeId
+    }
+    
+    /**
+     * 立即保存观看进度（用于切换剧集时更新最近播放）
+     */
+    fun saveWatchProgressImmediately() {
+        viewModelScope.launch {
+            try {
+                val mediaId = currentMediaId ?: return@launch
+                val duration = playerService.getDuration()
+                val position = playerService.getCurrentPosition()
+                
+                android.util.Log.d("PlayerViewModel", "Saving watch progress immediately: mediaId=$mediaId, episodeId=$currentEpisodeId, position=$position, duration=$duration")
+                
+                // 即使 position 为 0 也要保存，用于创建/更新观看历史记录
+                if (duration > 0) {
+                    watchHistoryService.saveWatchProgress(
+                        mediaId = mediaId,
+                        episodeId = currentEpisodeId,
+                        progress = position,
+                        duration = duration
+                    )
+                    android.util.Log.d("PlayerViewModel", "Watch progress saved successfully")
+                } else {
+                    android.util.Log.w("PlayerViewModel", "Duration is 0, cannot save watch progress yet")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("PlayerViewModel", "Error saving watch progress immediately", e)
+            }
+        }
+    }
+
+    fun getPlayer(): Player? = playerService.getPlayer()
+
+    /**
+     * 准备媒体播放 - 支持真实URL解析和WebDAV认证
+     */
+    fun prepareMedia(videoPath: String, title: String?, episodeTitle: String?, startPosition: Long = 0L) {
+        viewModelScope.launch {
+            try {
+                _isLoadingMedia.value = true
+                _loadError.value = null
+                
+                // 解析真实播放URL
+                val result = mediaUrlResolver.resolvePlaybackUrl(videoPath)
+                
+                if (result.isSuccess) {
+                    val playbackInfo = result.getOrNull()!!
+                    
+                    android.util.Log.d("PlayerViewModel", "Preparing media with startPosition=$startPosition ms")
+                    
+                    // 准备播放，直接传递起始位置
+                    playerService.prepareMedia(
+                        url = playbackInfo.url,
+                        title = title,
+                        episodeTitle = episodeTitle,
+                        headers = playbackInfo.headers,
+                        subtitles = playbackInfo.subtitles,
+                        startPositionMs = startPosition
+                    )
+                    
+                    // 如果指定了起始位置，等待播放器准备好后确保位置正确
+                    if (startPosition > 0) {
+                        android.util.Log.d("PlayerViewModel", "Waiting for player to be ready, then verifying start position: $startPosition ms")
+                        // 先暂停播放，避免从头播放
+                        playerService.pause()
+                        
+                        // 等待播放器准备好
+                        var retries = 0
+                        while (retries < 100) {
+                            // 检查播放器是否被释放
+                            val player = playerService.getPlayer()
+                            if (player == null) {
+                                android.util.Log.w("PlayerViewModel", "Player was released during preparation, reinitializing...")
+                                // 重新初始化播放器并重新准备媒体
+                                playerService.initializePlayer()
+                                playerService.prepareMedia(
+                                    url = playbackInfo.url,
+                                    title = title,
+                                    episodeTitle = episodeTitle,
+                                    headers = playbackInfo.headers,
+                                    subtitles = playbackInfo.subtitles,
+                                    startPositionMs = startPosition
+                                )
+                                retries = 0 // 重置重试计数
+                                delay(100) // 等待播放器初始化
+                                continue
+                            }
+                            
+                            val state = playerService.playerState.value
+                            if (state.type == com.lomen.tv.domain.service.PlayerState.Type.READY && state.duration > 0) {
+                                // 播放器已准备好，先暂停，然后跳转到正确位置
+                                playerService.pause()
+                                val currentPos = playerService.getCurrentPosition()
+                                android.util.Log.d("PlayerViewModel", "Player ready, current position: $currentPos, expected: $startPosition")
+                                
+                                // 如果位置不对（误差超过1秒），跳转到正确位置
+                                if (kotlin.math.abs(currentPos - startPosition) > 1000) {
+                                    android.util.Log.d("PlayerViewModel", "Position mismatch (diff: ${kotlin.math.abs(currentPos - startPosition)}ms), seeking to $startPosition")
+                                    playerService.seekTo(startPosition)
+                                    // 等待跳转完成
+                                    delay(300)
+                                } else {
+                                    android.util.Log.d("PlayerViewModel", "Start position is correct")
+                                }
+                                
+                                // 位置正确后，开始播放
+                                playerService.play()
+                                break
+                            }
+                            delay(50)
+                            retries++
+                        }
+                        if (retries >= 100) {
+                            android.util.Log.w("PlayerViewModel", "Player did not become ready in time")
+                            // 再次检查播放器是否存在
+                            val player = playerService.getPlayer()
+                            if (player != null) {
+                                // 即使超时，也尝试跳转并播放
+                                playerService.seekTo(startPosition)
+                                delay(200)
+                                playerService.play()
+                            } else {
+                                android.util.Log.e("PlayerViewModel", "Player is null, cannot play")
+                                _loadError.value = "播放器已释放，请重试"
+                            }
+                        }
+                    } else {
+                        // 如果没有指定起始位置，等待播放器准备好后自动播放
+                        android.util.Log.d("PlayerViewModel", "No start position, waiting for player to be ready and auto-play")
+                        var retries = 0
+                        while (retries < 100) {
+                            // 检查播放器是否被释放
+                            val player = playerService.getPlayer()
+                            if (player == null) {
+                                android.util.Log.w("PlayerViewModel", "Player was released during preparation, reinitializing...")
+                                // 重新初始化播放器并重新准备媒体
+                                playerService.initializePlayer()
+                                playerService.prepareMedia(
+                                    url = playbackInfo.url,
+                                    title = title,
+                                    episodeTitle = episodeTitle,
+                                    headers = playbackInfo.headers,
+                                    subtitles = playbackInfo.subtitles,
+                                    startPositionMs = startPosition
+                                )
+                                retries = 0 // 重置重试计数
+                                delay(100) // 等待播放器初始化
+                                continue
+                            }
+                            
+                            val state = playerService.playerState.value
+                            if (state.type == com.lomen.tv.domain.service.PlayerState.Type.READY) {
+                                android.util.Log.d("PlayerViewModel", "Player ready, starting playback")
+                                // 播放器已准备好，确保开始播放
+                                if (!state.isPlaying) {
+                                    playerService.play()
+                                }
+                                
+                                // 播放器准备好后，保存观看历史（用于更新"最近播放"）
+                                delay(1000) // 等待 duration 信息可用，并确保时间戳不同
+                                saveWatchProgressImmediately()
+                                
+                                break
+                            }
+                            delay(50)
+                            retries++
+                        }
+                        if (retries >= 100) {
+                            android.util.Log.w("PlayerViewModel", "Player did not become ready in time, trying to play anyway")
+                            // 再次检查播放器是否存在
+                            val player = playerService.getPlayer()
+                            if (player != null) {
+                                playerService.play()
+                            } else {
+                                android.util.Log.e("PlayerViewModel", "Player is null, cannot play")
+                                _loadError.value = "播放器已释放，请重试"
+                            }
+                        }
+                    }
+                    
+                    _isLoadingMedia.value = false
+                } else {
+                    _loadError.value = result.exceptionOrNull()?.message ?: "加载失败"
+                    _isLoadingMedia.value = false
+                }
+            } catch (e: Exception) {
+                _loadError.value = e.message ?: "未知错误"
+                _isLoadingMedia.value = false
+            }
+        }
+    }
+
+    fun play() {
+        playerService.play()
+    }
+
+    fun pause() {
+        playerService.pause()
+    }
+
+    fun togglePlayPause() {
+        playerService.togglePlayPause()
+    }
+
+    fun seekTo(position: Long) {
+        playerService.seekTo(position)
+    }
+
+    fun seekForward(deltaMs: Long = 10000) {
+        playerService.seekForward(deltaMs)
+    }
+
+    fun seekBackward(deltaMs: Long = 10000) {
+        playerService.seekBackward(deltaMs)
+    }
+
+    private val _episodeNavigationMessage = MutableStateFlow<String?>(null)
+    val episodeNavigationMessage: StateFlow<String?> = _episodeNavigationMessage.asStateFlow()
+    
+    private var onNavigateToEpisode: ((String, String?, String?, String?, String?, Long) -> Unit)? = null
+    
+    fun setEpisodeNavigationCallback(callback: (String, String?, String?, String?, String?, Long) -> Unit) {
+        onNavigateToEpisode = callback
+    }
+
+    /**
+     * 跳转到下一集
+     */
+    fun seekToNext() {
+        val mediaId = currentMediaId ?: return
+        val currentEpisodeId = currentEpisodeId
+        
+        viewModelScope.launch {
+            try {
+                val nextEpisode = getNextEpisode(mediaId, currentEpisodeId)
+                if (nextEpisode != null) {
+                    // 有下一集，跳转
+                    val playbackInfo = watchHistoryService.getPlaybackInfo(
+                        nextEpisode.mediaId,
+                        nextEpisode.episodeId
+                    )
+                    if (playbackInfo != null && playbackInfo.videoPath != null) {
+                        onNavigateToEpisode?.invoke(
+                            playbackInfo.videoPath,
+                            playbackInfo.title,
+                            playbackInfo.episodeTitle,
+                            playbackInfo.mediaId,
+                            playbackInfo.episodeId,
+                            playbackInfo.startPosition
+                        )
+                    } else {
+                        _episodeNavigationMessage.value = "无法加载下一集"
+                        delay(3000)
+                        _episodeNavigationMessage.value = null
+                    }
+                } else {
+                    // 没有下一集，显示提示
+                    _episodeNavigationMessage.value = "已是最后一集"
+                    // 3秒后清除提示
+                    delay(3000)
+                    _episodeNavigationMessage.value = null
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("PlayerViewModel", "Error navigating to next episode", e)
+                _episodeNavigationMessage.value = "跳转失败"
+                delay(3000)
+                _episodeNavigationMessage.value = null
+            }
+        }
+    }
+
+    /**
+     * 跳转到上一集
+     */
+    fun seekToPrevious() {
+        val mediaId = currentMediaId ?: return
+        val currentEpisodeId = currentEpisodeId
+        
+        viewModelScope.launch {
+            try {
+                val previousEpisode = getPreviousEpisode(mediaId, currentEpisodeId)
+                if (previousEpisode != null) {
+                    // 有上一集，跳转
+                    val playbackInfo = watchHistoryService.getPlaybackInfo(
+                        previousEpisode.mediaId,
+                        previousEpisode.episodeId
+                    )
+                    if (playbackInfo != null && playbackInfo.videoPath != null) {
+                        onNavigateToEpisode?.invoke(
+                            playbackInfo.videoPath,
+                            playbackInfo.title,
+                            playbackInfo.episodeTitle,
+                            playbackInfo.mediaId,
+                            playbackInfo.episodeId,
+                            playbackInfo.startPosition
+                        )
+                    } else {
+                        _episodeNavigationMessage.value = "无法加载上一集"
+                        delay(3000)
+                        _episodeNavigationMessage.value = null
+                    }
+                } else {
+                    // 没有上一集，显示提示
+                    _episodeNavigationMessage.value = "已是第一集"
+                    // 3秒后清除提示
+                    delay(3000)
+                    _episodeNavigationMessage.value = null
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("PlayerViewModel", "Error navigating to previous episode", e)
+                _episodeNavigationMessage.value = "跳转失败"
+                delay(3000)
+                _episodeNavigationMessage.value = null
+            }
+        }
+    }
+    
+    /**
+     * 获取下一集信息
+     */
+    private suspend fun getNextEpisode(mediaId: String, currentEpisodeId: String?): EpisodeInfo? {
+        // 首先检查是否是电视剧
+        val movie = movieDao.getMovieById(mediaId)
+        val webDavMedia = if (movie == null) {
+            webDavMediaDao.getById(mediaId)
+        } else null
+        
+        // 如果不是电视剧，返回 null
+        if (movie?.type != MediaType.TV_SHOW && webDavMedia?.type != MediaType.TV_SHOW) {
+            android.util.Log.d("PlayerViewModel", "Not a TV show, cannot navigate")
+            return null
+        }
+        
+        // 如果是 MovieEntity 类型的电视剧，从 EpisodeDao 获取剧集
+        if (movie != null) {
+            val episodes = episodeDao.getEpisodesByMovieId(mediaId).first()
+            android.util.Log.d("PlayerViewModel", "Found ${episodes.size} episodes for movieId=$mediaId")
+            
+            if (episodes.isEmpty()) {
+                android.util.Log.d("PlayerViewModel", "No episodes found")
+                return null
+            }
+            
+            // 排序所有剧集
+            val sortedEpisodes = episodes.sortedWith(compareBy(
+                { it.seasonNumber },
+                { it.episodeNumber }
+            ))
+            
+            android.util.Log.d("PlayerViewModel", "Sorted episodes: ${sortedEpisodes.map { "S${it.seasonNumber}E${it.episodeNumber}" }}")
+            
+            // 如果当前没有剧集ID，返回第一集
+            if (currentEpisodeId == null) {
+                val firstEpisode = sortedEpisodes.firstOrNull()
+                android.util.Log.d("PlayerViewModel", "No current episode ID, returning first episode: ${firstEpisode?.id}")
+                return firstEpisode?.let {
+                    EpisodeInfo(
+                        mediaId = mediaId,
+                        episodeId = it.id,
+                        seasonNumber = it.seasonNumber,
+                        episodeNumber = it.episodeNumber
+                    )
+                }
+            }
+            
+            // 找到当前剧集
+            val currentEpisode = sortedEpisodes.find { it.id == currentEpisodeId }
+            if (currentEpisode == null) {
+                android.util.Log.w("PlayerViewModel", "Current episode not found: currentEpisodeId=$currentEpisodeId")
+                android.util.Log.d("PlayerViewModel", "Available episode IDs: ${sortedEpisodes.map { it.id }}")
+                return null
+            }
+            
+            android.util.Log.d("PlayerViewModel", "Current episode: S${currentEpisode.seasonNumber}E${currentEpisode.episodeNumber}, index=${sortedEpisodes.indexOf(currentEpisode)}")
+            
+            // 找到下一集（同一季的下一集，或下一季的第一集）
+            val currentIndex = sortedEpisodes.indexOf(currentEpisode)
+            if (currentIndex < 0) {
+                android.util.Log.w("PlayerViewModel", "Current episode index is negative")
+                return null
+            }
+            
+            if (currentIndex >= sortedEpisodes.size - 1) {
+                android.util.Log.d("PlayerViewModel", "Already at last episode (index=$currentIndex, total=${sortedEpisodes.size})")
+                return null // 已经是最后一集
+            }
+            
+            val nextEpisode = sortedEpisodes[currentIndex + 1]
+            android.util.Log.d("PlayerViewModel", "Next episode: S${nextEpisode.seasonNumber}E${nextEpisode.episodeNumber}")
+            return EpisodeInfo(
+                mediaId = mediaId,
+                episodeId = nextEpisode.id,
+                seasonNumber = nextEpisode.seasonNumber,
+                episodeNumber = nextEpisode.episodeNumber
+            )
+        } else if (webDavMedia != null) {
+            // WebDAV 媒体：获取同一电视剧的所有剧集
+            // 如果数据库中没有集数信息，尝试从文件名解析
+            var currentEpisodeNumber = webDavMedia.episodeNumber
+            var currentSeasonNumber = webDavMedia.seasonNumber ?: 1
+            
+            if (currentEpisodeNumber == null) {
+                // 尝试从文件名解析集数信息
+                val fileName = webDavMedia.fileName
+                if (fileName != null) {
+                    val parseResult = FileNameParser.parse(fileName)
+                    if (parseResult.episode != null) {
+                        currentEpisodeNumber = parseResult.episode
+                        currentSeasonNumber = parseResult.season ?: 1
+                        android.util.Log.d("PlayerViewModel", "Parsed episode number from filename: S${currentSeasonNumber}E${currentEpisodeNumber}")
+                    }
+                }
+            }
+            
+            if (currentEpisodeNumber == null) {
+                android.util.Log.d("PlayerViewModel", "WebDAV media has no episode number (mediaId=$mediaId, fileName=${webDavMedia.fileName})")
+                return null // 不是剧集，无法导航
+            }
+            
+            // 获取同一资源库中同一电视剧的所有剧集
+            // 优先通过 tmdbId 匹配，如果没有 tmdbId，则通过标题匹配
+            val allMedia = webDavMediaDao.getByLibraryId(webDavMedia.libraryId).first()
+            
+            // 处理所有媒体，如果缺少集数信息，从文件名解析
+            val allEpisodes = allMedia
+                .map { media ->
+                    // 如果数据库中没有集数信息，尝试从文件名解析
+                    var episodeNum = media.episodeNumber
+                    var seasonNum = media.seasonNumber ?: 1
+                    
+                    if (episodeNum == null && media.fileName != null) {
+                        val parseResult = FileNameParser.parse(media.fileName)
+                        if (parseResult.episode != null) {
+                            episodeNum = parseResult.episode
+                            seasonNum = parseResult.season ?: 1
+                        }
+                    }
+                    
+                    // 创建一个包含解析后集数信息的临时对象
+                    Triple(media, episodeNum, seasonNum)
+                }
+                .filter { (media, episodeNum, _) ->
+                    media.type == MediaType.TV_SHOW && 
+                    episodeNum != null &&
+                    (if (webDavMedia.tmdbId != null) {
+                        media.tmdbId == webDavMedia.tmdbId
+                    } else {
+                        // 如果没有 tmdbId，通过标题匹配（去除集数信息）
+                        val baseTitle = webDavMedia.title.replace(Regex("第\\d+集.*"), "").trim()
+                        val otherBaseTitle = media.title.replace(Regex("第\\d+集.*"), "").trim()
+                        baseTitle == otherBaseTitle
+                    })
+                }
+                .sortedWith(compareBy(
+                    { it.third },  // seasonNumber
+                    { it.second ?: 0 }  // episodeNumber
+                ))
+                .map { it.first }  // 只保留原始媒体对象
+            
+            android.util.Log.d("PlayerViewModel", "Found ${allEpisodes.size} WebDAV episodes for libraryId=${webDavMedia.libraryId}, tmdbId=${webDavMedia.tmdbId}")
+            
+            // 打印所有剧集的详细信息用于调试
+            allEpisodes.forEachIndexed { index, media ->
+                var epNum = media.episodeNumber
+                var seasonNum = media.seasonNumber ?: 1
+                if (epNum == null && media.fileName != null) {
+                    val parseResult = FileNameParser.parse(media.fileName)
+                    if (parseResult.episode != null) {
+                        epNum = parseResult.episode
+                        seasonNum = parseResult.season ?: 1
+                    }
+                }
+                android.util.Log.d("PlayerViewModel", "Episode[$index]: id=${media.id}, S${seasonNum}E${epNum}, fileName=${media.fileName}")
+            }
+            
+            if (allEpisodes.isEmpty()) {
+                android.util.Log.d("PlayerViewModel", "No WebDAV episodes found")
+                return null
+            }
+            
+            // 找到当前剧集（优先通过 ID 匹配，如果找不到再通过集数匹配）
+            // 对于 WebDAV 媒体，优先使用 currentEpisodeId（如果存在），否则使用 mediaId
+            val targetId = currentEpisodeId ?: mediaId
+            var currentIndex = allEpisodes.indexOfFirst { it.id == targetId }
+            
+            if (currentIndex < 0) {
+                // 如果通过 ID 找不到，尝试通过集数匹配
+                android.util.Log.d("PlayerViewModel", "Current targetId=$targetId not found by ID, trying to match by episode number")
+                currentIndex = allEpisodes.indexOfFirst { media ->
+                    // 比较解析后的集数信息
+                    var otherEpisodeNum = media.episodeNumber
+                    var otherSeasonNum = media.seasonNumber ?: 1
+                    
+                    if (otherEpisodeNum == null && media.fileName != null) {
+                        val parseResult = FileNameParser.parse(media.fileName)
+                        if (parseResult.episode != null) {
+                            otherEpisodeNum = parseResult.episode
+                            otherSeasonNum = parseResult.season ?: 1
+                        }
+                    }
+                    
+                    val matches = otherEpisodeNum == currentEpisodeNumber && 
+                                  otherSeasonNum == currentSeasonNumber
+                    if (matches) {
+                        android.util.Log.d("PlayerViewModel", "Found match: media.id=${media.id}, S${otherSeasonNum}E${otherEpisodeNum}")
+                    }
+                    matches
+                }
+            } else {
+                android.util.Log.d("PlayerViewModel", "Found current episode by ID at index=$currentIndex (targetId=$targetId)")
+            }
+            
+            android.util.Log.d("PlayerViewModel", "Current WebDAV episode: S${currentSeasonNumber}E${currentEpisodeNumber}, mediaId=$mediaId, episodeId=$currentEpisodeId, targetId=$targetId, index=$currentIndex, total=${allEpisodes.size}")
+            
+            if (currentIndex < 0) {
+                android.util.Log.w("PlayerViewModel", "Current WebDAV episode not found")
+                return null
+            }
+            
+            if (currentIndex >= allEpisodes.size - 1) {
+                android.util.Log.d("PlayerViewModel", "Already at last WebDAV episode (index=$currentIndex, total=${allEpisodes.size})")
+                return null // 已经是最后一集
+            }
+            
+            val nextEpisode = allEpisodes[currentIndex + 1]
+            // 获取下一集的集数信息（可能需要从文件名解析）
+            var nextEpisodeNum = nextEpisode.episodeNumber
+            var nextSeasonNum = nextEpisode.seasonNumber ?: 1
+            if (nextEpisodeNum == null && nextEpisode.fileName != null) {
+                val parseResult = FileNameParser.parse(nextEpisode.fileName)
+                if (parseResult.episode != null) {
+                    nextEpisodeNum = parseResult.episode
+                    nextSeasonNum = parseResult.season ?: 1
+                }
+            }
+            
+            android.util.Log.d("PlayerViewModel", "Next WebDAV episode: S${nextSeasonNum}E${nextEpisodeNum}")
+            return EpisodeInfo(
+                mediaId = nextEpisode.id,
+                episodeId = null, // WebDAV 媒体没有单独的 episodeId
+                seasonNumber = nextSeasonNum,
+                episodeNumber = nextEpisodeNum ?: 0
+            )
+        }
+        
+        return null
+    }
+    
+    /**
+     * 获取上一集信息
+     */
+    private suspend fun getPreviousEpisode(mediaId: String, currentEpisodeId: String?): EpisodeInfo? {
+        // 首先检查是否是电视剧
+        val movie = movieDao.getMovieById(mediaId)
+        val webDavMedia = if (movie == null) {
+            webDavMediaDao.getById(mediaId)
+        } else null
+        
+        // 如果不是电视剧，返回 null
+        if (movie?.type != MediaType.TV_SHOW && webDavMedia?.type != MediaType.TV_SHOW) {
+            android.util.Log.d("PlayerViewModel", "Not a TV show, cannot navigate")
+            return null
+        }
+        
+        // 如果是 MovieEntity 类型的电视剧，从 EpisodeDao 获取剧集
+        if (movie != null) {
+            val episodes = episodeDao.getEpisodesByMovieId(mediaId).first()
+            android.util.Log.d("PlayerViewModel", "Found ${episodes.size} episodes for movieId=$mediaId")
+            
+            if (episodes.isEmpty()) {
+                android.util.Log.d("PlayerViewModel", "No episodes found")
+                return null
+            }
+            
+            // 如果当前没有剧集ID，返回 null（已经是第一集）
+            if (currentEpisodeId == null) {
+                android.util.Log.d("PlayerViewModel", "No current episode ID, cannot go to previous")
+                return null
+            }
+            
+            // 排序所有剧集
+            val sortedEpisodes = episodes.sortedWith(compareBy(
+                { it.seasonNumber },
+                { it.episodeNumber }
+            ))
+            
+            android.util.Log.d("PlayerViewModel", "Sorted episodes: ${sortedEpisodes.map { "S${it.seasonNumber}E${it.episodeNumber}" }}")
+            
+            // 找到当前剧集
+            val currentEpisode = sortedEpisodes.find { it.id == currentEpisodeId }
+            if (currentEpisode == null) {
+                android.util.Log.w("PlayerViewModel", "Current episode not found: currentEpisodeId=$currentEpisodeId")
+                android.util.Log.d("PlayerViewModel", "Available episode IDs: ${sortedEpisodes.map { it.id }}")
+                return null
+            }
+            
+            android.util.Log.d("PlayerViewModel", "Current episode: S${currentEpisode.seasonNumber}E${currentEpisode.episodeNumber}, index=${sortedEpisodes.indexOf(currentEpisode)}")
+            
+            // 找到上一集（同一季的上一集，或上一季的最后一集）
+            val currentIndex = sortedEpisodes.indexOf(currentEpisode)
+            if (currentIndex <= 0) {
+                android.util.Log.d("PlayerViewModel", "Already at first episode (index=$currentIndex)")
+                return null // 已经是第一集
+            }
+            
+            val previousEpisode = sortedEpisodes[currentIndex - 1]
+            android.util.Log.d("PlayerViewModel", "Previous episode: S${previousEpisode.seasonNumber}E${previousEpisode.episodeNumber}")
+            return EpisodeInfo(
+                mediaId = mediaId,
+                episodeId = previousEpisode.id,
+                seasonNumber = previousEpisode.seasonNumber,
+                episodeNumber = previousEpisode.episodeNumber
+            )
+        } else if (webDavMedia != null) {
+            // WebDAV 媒体：获取同一电视剧的所有剧集
+            // 如果数据库中没有集数信息，尝试从文件名解析
+            var currentEpisodeNumber = webDavMedia.episodeNumber
+            var currentSeasonNumber = webDavMedia.seasonNumber ?: 1
+            
+            if (currentEpisodeNumber == null) {
+                // 尝试从文件名解析集数信息
+                val fileName = webDavMedia.fileName
+                if (fileName != null) {
+                    val parseResult = FileNameParser.parse(fileName)
+                    if (parseResult.episode != null) {
+                        currentEpisodeNumber = parseResult.episode
+                        currentSeasonNumber = parseResult.season ?: 1
+                        android.util.Log.d("PlayerViewModel", "Parsed episode number from filename: S${currentSeasonNumber}E${currentEpisodeNumber}")
+                    }
+                }
+            }
+            
+            if (currentEpisodeNumber == null) {
+                android.util.Log.d("PlayerViewModel", "WebDAV media has no episode number (mediaId=$mediaId, fileName=${webDavMedia.fileName})")
+                return null // 不是剧集，无法导航
+            }
+            
+            // 获取同一资源库中同一电视剧的所有剧集
+            // 优先通过 tmdbId 匹配，如果没有 tmdbId，则通过标题匹配
+            val allMedia = webDavMediaDao.getByLibraryId(webDavMedia.libraryId).first()
+            
+            // 处理所有媒体，如果缺少集数信息，从文件名解析
+            val allEpisodes = allMedia
+                .map { media ->
+                    // 如果数据库中没有集数信息，尝试从文件名解析
+                    var episodeNum = media.episodeNumber
+                    var seasonNum = media.seasonNumber ?: 1
+                    
+                    if (episodeNum == null && media.fileName != null) {
+                        val parseResult = FileNameParser.parse(media.fileName)
+                        if (parseResult.episode != null) {
+                            episodeNum = parseResult.episode
+                            seasonNum = parseResult.season ?: 1
+                        }
+                    }
+                    
+                    // 创建一个包含解析后集数信息的临时对象
+                    Triple(media, episodeNum, seasonNum)
+                }
+                .filter { (media, episodeNum, _) ->
+                    media.type == MediaType.TV_SHOW && 
+                    episodeNum != null &&
+                    (if (webDavMedia.tmdbId != null) {
+                        media.tmdbId == webDavMedia.tmdbId
+                    } else {
+                        // 如果没有 tmdbId，通过标题匹配（去除集数信息）
+                        val baseTitle = webDavMedia.title.replace(Regex("第\\d+集.*"), "").trim()
+                        val otherBaseTitle = media.title.replace(Regex("第\\d+集.*"), "").trim()
+                        baseTitle == otherBaseTitle
+                    })
+                }
+                .sortedWith(compareBy(
+                    { it.third },  // seasonNumber
+                    { it.second ?: 0 }  // episodeNumber
+                ))
+                .map { it.first }  // 只保留原始媒体对象
+            
+            android.util.Log.d("PlayerViewModel", "Found ${allEpisodes.size} WebDAV episodes for libraryId=${webDavMedia.libraryId}, tmdbId=${webDavMedia.tmdbId}")
+            
+            // 打印所有剧集的详细信息用于调试
+            allEpisodes.forEachIndexed { index, media ->
+                var epNum = media.episodeNumber
+                var seasonNum = media.seasonNumber ?: 1
+                if (epNum == null && media.fileName != null) {
+                    val parseResult = FileNameParser.parse(media.fileName)
+                    if (parseResult.episode != null) {
+                        epNum = parseResult.episode
+                        seasonNum = parseResult.season ?: 1
+                    }
+                }
+                android.util.Log.d("PlayerViewModel", "Episode[$index]: id=${media.id}, S${seasonNum}E${epNum}, fileName=${media.fileName}")
+            }
+            
+            if (allEpisodes.isEmpty()) {
+                android.util.Log.d("PlayerViewModel", "No WebDAV episodes found")
+                return null
+            }
+            
+            // 找到当前剧集（优先通过 ID 匹配，如果找不到再通过集数匹配）
+            // 对于 WebDAV 媒体，优先使用 currentEpisodeId（如果存在），否则使用 mediaId
+            val targetId = currentEpisodeId ?: mediaId
+            var currentIndex = allEpisodes.indexOfFirst { it.id == targetId }
+            
+            if (currentIndex < 0) {
+                // 如果通过 ID 找不到，尝试通过集数匹配
+                android.util.Log.d("PlayerViewModel", "Current targetId=$targetId not found by ID, trying to match by episode number")
+                currentIndex = allEpisodes.indexOfFirst { media ->
+                    // 比较解析后的集数信息
+                    var otherEpisodeNum = media.episodeNumber
+                    var otherSeasonNum = media.seasonNumber ?: 1
+                    
+                    if (otherEpisodeNum == null && media.fileName != null) {
+                        val parseResult = FileNameParser.parse(media.fileName)
+                        if (parseResult.episode != null) {
+                            otherEpisodeNum = parseResult.episode
+                            otherSeasonNum = parseResult.season ?: 1
+                        }
+                    }
+                    
+                    val matches = otherEpisodeNum == currentEpisodeNumber && 
+                                  otherSeasonNum == currentSeasonNumber
+                    if (matches) {
+                        android.util.Log.d("PlayerViewModel", "Found match: media.id=${media.id}, S${otherSeasonNum}E${otherEpisodeNum}")
+                    }
+                    matches
+                }
+            } else {
+                android.util.Log.d("PlayerViewModel", "Found current episode by ID at index=$currentIndex (targetId=$targetId)")
+            }
+            
+            android.util.Log.d("PlayerViewModel", "Current WebDAV episode: S${currentSeasonNumber}E${currentEpisodeNumber}, mediaId=$mediaId, episodeId=$currentEpisodeId, targetId=$targetId, index=$currentIndex, total=${allEpisodes.size}")
+            
+            if (currentIndex < 0) {
+                android.util.Log.w("PlayerViewModel", "Current WebDAV episode not found")
+                return null
+            }
+            
+            if (currentIndex <= 0) {
+                android.util.Log.d("PlayerViewModel", "Already at first WebDAV episode (index=$currentIndex)")
+                return null // 已经是第一集
+            }
+            
+            val previousEpisode = allEpisodes[currentIndex - 1]
+            // 获取上一集的集数信息（可能需要从文件名解析）
+            var prevEpisodeNum = previousEpisode.episodeNumber
+            var prevSeasonNum = previousEpisode.seasonNumber ?: 1
+            if (prevEpisodeNum == null && previousEpisode.fileName != null) {
+                val parseResult = FileNameParser.parse(previousEpisode.fileName)
+                if (parseResult.episode != null) {
+                    prevEpisodeNum = parseResult.episode
+                    prevSeasonNum = parseResult.season ?: 1
+                }
+            }
+            
+            android.util.Log.d("PlayerViewModel", "Previous WebDAV episode: S${prevSeasonNum}E${prevEpisodeNum}")
+            return EpisodeInfo(
+                mediaId = previousEpisode.id,
+                episodeId = null, // WebDAV 媒体没有单独的 episodeId
+                seasonNumber = prevSeasonNum,
+                episodeNumber = prevEpisodeNum ?: 0
+            )
+        }
+        
+        return null
+    }
+    
+    private data class EpisodeInfo(
+        val mediaId: String,
+        val episodeId: String?,  // 可空，WebDAV 媒体没有单独的 episodeId
+        val seasonNumber: Int,
+        val episodeNumber: Int
+    )
+
+    fun setPlaybackSpeed(speed: Float) {
+        playerService.setPlaybackSpeed(speed)
+    }
+
+    fun getAvailableSpeeds(): List<Float> = playerService.getAvailableSpeeds()
+
+    fun setVolume(volume: Float) {
+        playerService.setVolume(volume)
+    }
+
+    fun toggleMute() {
+        playerService.toggleMute()
+    }
+
+    fun isMuted(): Boolean = playerService.isMuted()
+    
+    fun selectSubtitle(index: Int) {
+        playerService.selectSubtitle(index)
+    }
+    
+    fun selectAudioTrack(index: Int) {
+        playerService.selectAudioTrack(index)
+    }
+    
+    /**
+     * 清除播放器错误状态
+     */
+    fun clearError() {
+        playerService.clearError()
+    }
+    
+    /**
+     * 解析播放 URL
+     */
+    suspend fun resolvePlaybackUrl(filePath: String): String {
+        val result = mediaUrlResolver.resolvePlaybackUrl(filePath)
+        return if (result.isSuccess) {
+            result.getOrNull()?.url ?: filePath
+        } else {
+            filePath
+        }
+    }
+    
+    /**
+     * 获取当前剧集的所有剧集列表
+     */
+    suspend fun getEpisodeList(): List<EpisodeListItem> {
+        val mediaId = currentMediaId ?: return emptyList()
+        
+        return try {
+            val movie = movieDao.getMovieById(mediaId)
+            val webDavMedia = if (movie == null) {
+                webDavMediaDao.getById(mediaId)
+            } else null
+            
+            if (movie?.type == MediaType.TV_SHOW) {
+                // MovieEntity 类型的电视剧
+                val episodes = episodeDao.getEpisodesByMovieId(mediaId).first()
+                
+                // 尝试从 TMDB 获取剧集信息（如果有 TMDB ID）
+                val tmdbEpisodesMap = mutableMapOf<Pair<Int, Int>, com.lomen.tv.data.scraper.EpisodeInfo>()
+                if (movie.tmdbId != null) {
+                    try {
+                        val tmdbScraper = com.lomen.tv.data.scraper.TmdbScraper.getInstance()
+                        // 获取所有季的剧集信息
+                        val seasons = episodes.map { it.seasonNumber }.distinct()
+                        for (season in seasons) {
+                            val tmdbEpisodes = tmdbScraper.getTvSeasonEpisodes(movie.tmdbId.toString(), season)
+                            tmdbEpisodes?.forEach { ep ->
+                                tmdbEpisodesMap[Pair(season, ep.episodeNumber)] = ep
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("PlayerViewModel", "Failed to get TMDB episode info", e)
+                    }
+                }
+                
+                episodes.map { episode ->
+                    // 优先使用 TMDB 的副标题
+                    val tmdbEpisode = tmdbEpisodesMap[Pair(episode.seasonNumber, episode.episodeNumber)]
+                    val episodeTitle = tmdbEpisode?.name?.takeIf { it.isNotBlank() } 
+                        ?: episode.title 
+                        ?: ""
+                    
+                    EpisodeListItem(
+                        id = episode.id,
+                        episodeNumber = episode.episodeNumber,
+                        seasonNumber = episode.seasonNumber,
+                        title = episodeTitle,
+                        stillUrl = episode.stillUrl,
+                        path = episode.quarkPath
+                    )
+                }
+            } else if (webDavMedia?.type == MediaType.TV_SHOW) {
+                // WebDAV 类型的电视剧
+                val allMedia = if (webDavMedia.libraryId != null) {
+                    webDavMediaDao.getByLibraryId(webDavMedia.libraryId).first()
+                } else {
+                    emptyList()
+                }
+                
+                val allEpisodes = allMedia
+                    .map { media ->
+                        var episodeNum = media.episodeNumber
+                        var seasonNum = media.seasonNumber ?: 1
+                        
+                        if (episodeNum == null && media.fileName != null) {
+                            val parseResult = FileNameParser.parse(media.fileName)
+                            if (parseResult.episode != null) {
+                                episodeNum = parseResult.episode
+                                seasonNum = parseResult.season ?: 1
+                            }
+                        }
+                        
+                        Triple(media, episodeNum, seasonNum)
+                    }
+                    .filter { (media, episodeNum, _) ->
+                        media.type == MediaType.TV_SHOW && 
+                        episodeNum != null &&
+                        (if (webDavMedia.tmdbId != null) {
+                            media.tmdbId == webDavMedia.tmdbId
+                        } else {
+                            val baseTitle = webDavMedia.title.replace(Regex("第\\d+集.*"), "").trim()
+                            val otherBaseTitle = media.title.replace(Regex("第\\d+集.*"), "").trim()
+                            baseTitle == otherBaseTitle
+                        })
+                    }
+                    .sortedWith(compareBy(
+                        { it.third },
+                        { it.second ?: 0 }
+                    ))
+                    .map { it.first }
+                
+                // 尝试从 TMDB 获取剧集信息
+                val tmdbEpisodesMap = mutableMapOf<Pair<Int, Int>, com.lomen.tv.data.scraper.EpisodeInfo>()
+                if (webDavMedia.tmdbId != null) {
+                    try {
+                        val tmdbScraper = com.lomen.tv.data.scraper.TmdbScraper.getInstance()
+                        val seasons = allEpisodes.mapNotNull { it.seasonNumber }.distinct()
+                        for (season in seasons) {
+                            val tmdbEpisodes = tmdbScraper.getTvSeasonEpisodes(webDavMedia.tmdbId, season)
+                            tmdbEpisodes?.forEach { ep ->
+                                tmdbEpisodesMap[Pair(season, ep.episodeNumber)] = ep
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("PlayerViewModel", "Failed to get TMDB episode info", e)
+                    }
+                }
+                
+                allEpisodes.map { media ->
+                    val episodeNum = media.episodeNumber ?: 1
+                    val seasonNum = media.seasonNumber ?: 1
+                    
+                    // 优先使用 TMDB 的副标题
+                    val tmdbEpisode = tmdbEpisodesMap[Pair(seasonNum, episodeNum)]
+                    val episodeTitle = tmdbEpisode?.name?.takeIf { it.isNotBlank() } 
+                        ?: media.title 
+                        ?: ""
+                    
+                    EpisodeListItem(
+                        id = media.id,
+                        episodeNumber = episodeNum,
+                        seasonNumber = seasonNum,
+                        title = episodeTitle,
+                        stillUrl = media.posterUrl,
+                        path = media.filePath
+                    )
+                }
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PlayerViewModel", "Error getting episode list", e)
+            emptyList()
+        }
+    }
+    
+    /**
+     * 获取当前集数的所有清晰度选项
+     */
+    suspend fun getQualityOptions(): List<QualityOption> {
+        val mediaId = currentMediaId ?: return emptyList()
+        val episodeId = currentEpisodeId
+        
+        return try {
+            val movie = movieDao.getMovieById(mediaId)
+            val webDavMedia = if (movie == null) {
+                webDavMediaDao.getById(mediaId)
+            } else null
+            
+            if (movie?.type == MediaType.TV_SHOW && episodeId != null) {
+                // MovieEntity 类型的电视剧，同一集可能有多个清晰度文件
+                val episode = episodeDao.getEpisodeById(episodeId)
+                if (episode != null) {
+                    // 查找同名的其他剧集（不同清晰度）
+                    val allEpisodes = episodeDao.getEpisodesByMovieId(mediaId).first()
+                    val sameEpisodes = allEpisodes.filter { 
+                        it.episodeNumber == episode.episodeNumber && 
+                        it.seasonNumber == episode.seasonNumber &&
+                        it.id != episodeId
+                    }
+                    
+                    val options = mutableListOf<QualityOption>()
+                    // 添加当前清晰度
+                    options.add(QualityOption(
+                        id = episode.id,
+                        label = detectQualityLabel(episode.quarkPath ?: ""),
+                        filePath = episode.quarkPath
+                    ))
+                    // 添加其他清晰度
+                    sameEpisodes.forEach { ep ->
+                        options.add(QualityOption(
+                            id = ep.id,
+                            label = detectQualityLabel(ep.quarkPath ?: ""),
+                            filePath = ep.quarkPath
+                        ))
+                    }
+                    options
+                } else {
+                    emptyList()
+                }
+            } else if (webDavMedia?.type == MediaType.TV_SHOW) {
+                // WebDAV 类型的电视剧，查找同一集的不同清晰度文件
+                val currentEpisode = if (episodeId != null) {
+                    webDavMediaDao.getById(episodeId)
+                } else {
+                    webDavMedia
+                }
+                
+                if (currentEpisode != null) {
+                    val episodeNum = currentEpisode.episodeNumber
+                    val seasonNum = currentEpisode.seasonNumber ?: 1
+                    
+                    val allMedia = if (currentEpisode.libraryId != null) {
+                        webDavMediaDao.getByLibraryId(currentEpisode.libraryId).first()
+                    } else {
+                        emptyList()
+                    }
+                    
+                    val sameEpisodes = allMedia.filter { media ->
+                        val mediaEpisodeNum = media.episodeNumber
+                        val mediaSeasonNum = media.seasonNumber ?: 1
+                        media.type == MediaType.TV_SHOW &&
+                        mediaEpisodeNum == episodeNum &&
+                        mediaSeasonNum == seasonNum &&
+                        (if (currentEpisode.tmdbId != null) {
+                            media.tmdbId == currentEpisode.tmdbId
+                        } else {
+                            val baseTitle = currentEpisode.title.replace(Regex("第\\d+集.*"), "").trim()
+                            val otherBaseTitle = media.title.replace(Regex("第\\d+集.*"), "").trim()
+                            baseTitle == otherBaseTitle
+                        })
+                    }
+                    
+                    sameEpisodes.map { media ->
+                        QualityOption(
+                            id = media.id,
+                            label = detectQualityLabel(media.fileName ?: ""),
+                            filePath = media.filePath
+                        )
+                    }
+                } else {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PlayerViewModel", "Error getting quality options", e)
+            emptyList()
+        }
+    }
+    
+    /**
+     * 从文件路径或文件名检测清晰度标签
+     */
+    private fun detectQualityLabel(filePath: String): String {
+        val fileName = filePath.substringAfterLast('/')
+        return when {
+            fileName.contains("2160p", ignoreCase = true) || 
+            fileName.contains("4K", ignoreCase = true) -> "4K"
+            fileName.contains("1080p", ignoreCase = true) -> "1080p"
+            fileName.contains("720p", ignoreCase = true) -> "720p"
+            fileName.contains("480p", ignoreCase = true) -> "480p"
+            fileName.contains("蓝光", ignoreCase = true) || 
+            fileName.contains("BluRay", ignoreCase = true) || 
+            fileName.contains("BD", ignoreCase = true) -> "蓝光"
+            fileName.contains("HDR", ignoreCase = true) -> "HDR"
+            else -> "高清"
+        }
+    }
+    
+    /**
+     * 切换到指定清晰度
+     */
+    suspend fun switchQuality(qualityId: String): Boolean {
+        val mediaId = currentMediaId ?: return false
+        
+        return try {
+            val movie = movieDao.getMovieById(mediaId)
+            val webDavMedia = if (movie == null) {
+                webDavMediaDao.getById(mediaId)
+            } else null
+            
+            if (movie?.type == MediaType.TV_SHOW) {
+                // MovieEntity 类型
+                val episode = episodeDao.getEpisodeById(qualityId)
+                if (episode != null && episode.quarkPath != null) {
+                    val videoPath = episode.quarkPath
+                    prepareMedia(
+                        videoPath = videoPath,
+                        title = movie.title,
+                        episodeTitle = episode.title,
+                        startPosition = 0L
+                    )
+                    currentEpisodeId = qualityId
+                    true
+                } else {
+                    false
+                }
+            } else if (webDavMedia?.type == MediaType.TV_SHOW) {
+                // WebDAV 类型
+                val media = webDavMediaDao.getById(qualityId)
+                if (media != null && media.filePath != null) {
+                    val videoPath = media.filePath
+                    prepareMedia(
+                        videoPath = videoPath,
+                        title = webDavMedia.title,
+                        episodeTitle = media.title,
+                        startPosition = 0L
+                    )
+                    currentEpisodeId = qualityId
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PlayerViewModel", "Error switching quality", e)
+            false
+        }
+    }
+    
+    data class EpisodeListItem(
+        val id: String,
+        val episodeNumber: Int,
+        val seasonNumber: Int,
+        val title: String,
+        val stillUrl: String?,
+        val path: String?
+    )
+    
+    data class QualityOption(
+        val id: String,
+        val label: String,
+        val filePath: String?
+    )
+
+    private fun startPositionUpdates() {
+        positionUpdateJob?.cancel()
+        positionUpdateJob = viewModelScope.launch {
+            while (isActive) {
+                playerService.updatePosition()
+                delay(1000)
+            }
+        }
+    }
+
+    private fun stopPositionUpdates() {
+        positionUpdateJob?.cancel()
+        positionUpdateJob = null
+    }
+
+    private fun startProgressSaving() {
+        saveProgressJob?.cancel()
+        saveProgressJob = viewModelScope.launch {
+            while (isActive) {
+                delay(30000) // 每30秒保存一次进度
+                saveWatchProgress()
+            }
+        }
+    }
+
+    private fun stopProgressSaving() {
+        saveProgressJob?.cancel()
+        saveProgressJob = null
+    }
+
+    private fun saveWatchProgress() {
+        val mediaId = currentMediaId
+        if (mediaId == null) {
+            android.util.Log.w("PlayerViewModel", "Cannot save watch progress: mediaId is null")
+            return
+        }
+        
+        val position = playerService.getCurrentPosition()
+        val duration = playerService.getDuration()
+
+        android.util.Log.d("PlayerViewModel", "Saving progress: mediaId=$mediaId, episodeId=$currentEpisodeId, position=$position, duration=$duration")
+
+        if (duration > 0) {
+            viewModelScope.launch {
+                try {
+                    watchHistoryService.saveWatchProgress(
+                        mediaId = mediaId,
+                        episodeId = currentEpisodeId,
+                        progress = position,
+                        duration = duration
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("PlayerViewModel", "Error saving watch progress", e)
+                }
+            }
+        } else {
+            android.util.Log.w("PlayerViewModel", "Cannot save watch progress: duration is 0")
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        releasePlayer()
+    }
+}

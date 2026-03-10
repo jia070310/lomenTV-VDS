@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- TV-specific features -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <application
+        android:name=".LomenTVApplication"
+        android:allowBackup="true"
+        android:banner="@drawable/tv_banner"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.LomenTV"
+        android:usesCleartextTraffic="true"
+        tools:targetApi="31">
+
+        <!-- Main Activity for TV -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:banner="@drawable/tv_banner"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:logo="@drawable/tv_banner"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.LomenTV.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Player Activity -->
+        <activity
+            android:name=".ui.player.PlayerActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.LomenTV.Fullscreen" />
+
+    </application>
+
+</manifest>
