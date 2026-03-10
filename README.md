@@ -1,7 +1,7 @@
 # LomenTV VDS
 
 一款专为 Android TV 设计的视频播放器，支持 WebDAV 网盘资源导入、智能刮削、记忆续播等功能。
-
+![image](https://github.com/jia070310/lomenTV-VDS/blob/main/23.png)
 ## 功能特性
 
 ### 媒体库管理
