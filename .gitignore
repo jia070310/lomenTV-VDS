@@ -33,9 +33,6 @@ Thumbs.db
 # Qoder specific
 .qoder/
 
-# Notification config (project specific)
-NOTIFICATIONS_CONFIG.md
-
 # Kotlin
 *.class
 *.kotlin_module

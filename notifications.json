@@ -1,0 +1,11 @@
+{
+  "notifications": [
+    {
+      "id": "welcome",
+      "title": "欢迎使用",
+      "content": "LomenTV VDS - 专为 Android TV 设计的视频播放器",
+      "type": "info",
+      "enabled": true
+    }
+  ]
+}
