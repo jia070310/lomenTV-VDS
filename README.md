@@ -25,6 +25,7 @@
 - **TMDB API 配置**：支持自定义 TMDB API Key
 - **最近观看**：显示最近观看记录
 - **搜索功能**：支持媒体搜索
+- **通知栏**：首页显示滚动通知，支持远程配置
 
 ## 系统要求
 
@@ -74,6 +75,33 @@ cd lomenTV-VDS
 1. 访问 [TMDB 官网](https://www.themoviedb.org/settings/api) 申请 API Key
 2. 在设置页选择"TMDB API 设置"
 3. 扫描二维码或手动输入 API Key
+
+### 通知配置
+应用支持从远程服务器获取通知并在首页显示。
+
+**通知文件位置**：`notifications.json`
+
+**访问方式**：应用通过 `https://gh-proxy.org/` 加速器访问 GitHub 上的通知文件
+
+**配置格式**：
+```json
+{
+  "notifications": [
+    {
+      "id": "welcome",
+      "title": "欢迎使用",
+      "content": "通知内容",
+      "type": "info",
+      "enabled": true
+    }
+  ]
+}
+```
+
+**更新方式**：
+1. 修改 `notifications.json` 文件
+2. 提交到 GitHub 仓库
+3. 应用自动获取最新通知（每次打开首页时刷新）
 
 ## 项目结构
 
