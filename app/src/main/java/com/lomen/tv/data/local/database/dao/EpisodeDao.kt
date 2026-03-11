@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface EpisodeDao {
 
+    @Query("SELECT * FROM episodes")
+    suspend fun getAllEpisodes(): List<EpisodeEntity>
+
     @Query("SELECT * FROM episodes WHERE movieId = :movieId ORDER BY seasonNumber, episodeNumber")
     fun getEpisodesByMovieId(movieId: String): Flow<List<EpisodeEntity>>
 

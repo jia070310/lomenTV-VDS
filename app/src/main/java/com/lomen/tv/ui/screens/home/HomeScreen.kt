@@ -48,8 +48,9 @@ import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.delay
 import com.lomen.tv.domain.model.ResourceLibrary
 import java.util.concurrent.TimeUnit
 import androidx.compose.ui.Alignment
@@ -98,6 +99,8 @@ import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
 import com.lomen.tv.ui.screens.settings.TmdbApiSettingsDialog
+import com.lomen.tv.ui.viewmodel.VersionUpdateViewModel
+import com.lomen.tv.ui.components.VersionUpdateBadge
 
 
 private const val HOME_SECTION_MAX_ITEMS = 10
@@ -114,7 +117,8 @@ fun HomeScreen(
     onPlayFromHistory: (com.lomen.tv.domain.service.WatchHistoryItem) -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
     resourceLibraryViewModel: com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel = hiltViewModel(),
-    mediaSyncViewModel: com.lomen.tv.ui.viewmodel.MediaSyncViewModel = hiltViewModel()
+    mediaSyncViewModel: com.lomen.tv.ui.viewmodel.MediaSyncViewModel = hiltViewModel(),
+    versionUpdateViewModel: VersionUpdateViewModel = hiltViewModel()
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val navigationFocusRequester = remember { FocusRequester() }
@@ -180,6 +184,14 @@ fun HomeScreen(
     var showTmdbApiRequiredDialog by remember { mutableStateOf(false) }
     var showTmdbApiSettingsDialog by remember { mutableStateOf(false) }
     
+    // 版本更新检查
+    val hasUpdate by versionUpdateViewModel.hasUpdate.collectAsState()
+    val versionInfo by versionUpdateViewModel.versionInfo.collectAsState()
+    var showVersionUpdateDialog by remember { mutableStateOf(false) }
+    
+    // 获取上下文
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
     // 启动时检测 TMDB API 配置
     LaunchedEffect(Unit) {
         // 延迟检测，确保界面已加载
@@ -188,12 +200,16 @@ fun HomeScreen(
             android.util.Log.d("HomeScreen", "TMDB API not configured, showing required dialog")
             showTmdbApiRequiredDialog = true
         }
+        
+        // 检查版本更新
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        val currentVersionCode = packageInfo.versionCode
+        versionUpdateViewModel.checkForUpdates(currentVersionCode)
     }
 
     // 双击返回键处理
     var backPressedOnce by remember { mutableStateOf(false) }
     var backPressJob by remember { mutableStateOf<Job?>(null) }
-    val context = androidx.compose.ui.platform.LocalContext.current
 
     BackHandler {
         if (backPressedOnce) {
@@ -231,6 +247,29 @@ fun HomeScreen(
                 }
             }
     ) {
+        // 顶栏中央版本更新提示
+        val currentVersionInfo = versionInfo
+        if (hasUpdate && currentVersionInfo != null) {
+            var showTopBadge by remember { mutableStateOf(true) }
+            if (showTopBadge) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 24.dp),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    VersionUpdateBadge(
+                        versionName = currentVersionInfo.versionName,
+                        onClick = { 
+                            showTopBadge = false
+                            showVersionUpdateDialog = true 
+                        },
+                        onDismiss = { showTopBadge = false }
+                    )
+                }
+            }
+        }
+        
         TvLazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -448,6 +487,7 @@ fun HomeScreen(
                 // 按上键退出导航栏，将焦点返回到内容区域
                 contentFocusRequester.requestFocus()
             },
+            hasUpdate = hasUpdate,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .focusRequester(navigationFocusRequester)
@@ -478,6 +518,47 @@ fun HomeScreen(
             TmdbApiSettingsDialog(
                 onDismiss = { showTmdbApiSettingsDialog = false }
             )
+        }
+        
+        // 版本更新对话框
+        if (showVersionUpdateDialog && versionInfo != null) {
+            val scope = rememberCoroutineScope()
+            val currentVersionInfo = versionInfo
+            if (currentVersionInfo != null) {
+                com.lomen.tv.ui.components.VersionUpdateDialog(
+                    versionInfo = currentVersionInfo,
+                    onUpdate = {
+                        showVersionUpdateDialog = false
+                        // 开始下载
+                        versionUpdateViewModel.startDownloadProgress()
+                        val downloadService = com.lomen.tv.domain.service.DownloadService(context)
+                        scope.launch {
+                            downloadService.downloadApk(
+                                versionInfo = currentVersionInfo,
+                                onProgress = { progress ->
+                                    versionUpdateViewModel.updateDownloadProgress(progress)
+                                },
+                                onComplete = { apkFile ->
+                                    versionUpdateViewModel.completeDownload()
+                                    if (apkFile != null) {
+                                        downloadService.installApk(apkFile)
+                                    }
+                                }
+                            )
+                        }
+                    },
+                    onCancel = {
+                        showVersionUpdateDialog = false
+                    }
+                )
+            }
+        }
+        
+        // 下载进度提示
+        val isDownloading by versionUpdateViewModel.isDownloading.collectAsState()
+        val downloadProgress by versionUpdateViewModel.downloadProgress.collectAsState()
+        if (isDownloading) {
+            com.lomen.tv.ui.components.DownloadProgressToast(progress = downloadProgress)
         }
     }
 }
@@ -1223,6 +1304,7 @@ private fun BottomNavigationBar(
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
     onExitNavigation: () -> Unit,
+    hasUpdate: Boolean,
     modifier: Modifier = Modifier
 ) {
     val items = listOf(
@@ -1248,33 +1330,48 @@ private fun BottomNavigationBar(
         ) {
             items.forEachIndexed { index, item ->
                 val isSelected = index == selectedTab
+                val isSettingsTab = index == 4
+                
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    IconButton(
-                        onClick = { onTabSelected(index) },
-                        colors = IconButtonDefaults.colors(
-                            containerColor = Color.Transparent,
-                            contentColor = if (isSelected) PrimaryYellow else BackgroundDark,
-                            focusedContainerColor = PrimaryYellow,
-                            focusedContentColor = BackgroundDark
-                        ),
-                        modifier = Modifier
-                            .onKeyEvent { keyEvent ->
-                                // 使用 onKeyEvent 在按键释放时处理
-                                if (keyEvent.key == Key.DirectionUp && keyEvent.type == KeyEventType.KeyUp) {
-                                    onExitNavigation()
-                                    true
-                                } else {
-                                    false
+                    Box {
+                        IconButton(
+                            onClick = { onTabSelected(index) },
+                            colors = IconButtonDefaults.colors(
+                                containerColor = Color.Transparent,
+                                contentColor = if (isSelected) PrimaryYellow else BackgroundDark,
+                                focusedContainerColor = PrimaryYellow,
+                                focusedContentColor = BackgroundDark
+                            ),
+                            modifier = Modifier
+                                .onKeyEvent { keyEvent ->
+                                    // 使用 onKeyEvent 在按键释放时处理
+                                    if (keyEvent.key == Key.DirectionUp && keyEvent.type == KeyEventType.KeyUp) {
+                                        onExitNavigation()
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 }
-                            }
-                    ) {
-                        Icon(
-                            imageVector = item.icon,
-                            contentDescription = item.label,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        ) {
+                            Icon(
+                                imageVector = item.icon,
+                                contentDescription = item.label,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        
+                        // 红点提示
+                        if (isSettingsTab && hasUpdate) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .align(Alignment.TopEnd)
+                                    .clip(CircleShape)
+                                    .background(Color.Red)
+                            )
+                        }
                     }
 
                     Text(
@@ -1768,6 +1865,7 @@ private fun TmdbApiRequiredDialog(
                             .focusProperties {
                                 left = FocusRequester.Cancel
                                 up = FocusRequester.Cancel
+                                down = FocusRequester.Cancel
                             }
                     ) {
                         Text(
@@ -1794,6 +1892,7 @@ private fun TmdbApiRequiredDialog(
                             .onFocusChanged { confirmButtonFocused = it.isFocused }
                             .focusProperties {
                                 up = FocusRequester.Cancel
+                                down = FocusRequester.Cancel
                             }
                     ) {
                         Text(

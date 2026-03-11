@@ -19,7 +19,7 @@ import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
         WatchHistoryEntity::class,
         WebDavMediaEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

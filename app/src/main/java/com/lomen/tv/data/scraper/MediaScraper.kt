@@ -25,7 +25,8 @@ data class ScrapedMedia(
     val filePath: String,
     val fileName: String,
     val source: String, // "tmdb" or "douban"
-    val tmdbId: String? = null
+    val tmdbId: String? = null,
+    val quarkFileId: String? = null // 夸克网盘文件ID
 ) {
     // 保留isMovie用于向后兼容
     val isMovie: Boolean

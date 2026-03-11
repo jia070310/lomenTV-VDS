@@ -15,11 +15,20 @@ android {
         applicationId = "com.lomen.tv"
         minSdk = 21
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 10002
+        versionName = "1.0.2"
 
         // TV-specific configurations
         vectorDrawables.useSupportLibrary = true
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("../lomenTV.jks")
+            storePassword = "lomenTV123"
+            keyAlias = "lomenTV"
+            keyPassword = "lomenTV123"
+        }
     }
 
     buildTypes {
@@ -29,6 +38,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

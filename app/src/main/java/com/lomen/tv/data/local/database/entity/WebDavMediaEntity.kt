@@ -33,6 +33,7 @@ data class WebDavMediaEntity(
     val fileName: String,
     val fileSize: Long = 0,
     val fileFingerprint: String? = null, // 文件指纹（路径+大小+修改时间的MD5）
+    val quarkFileId: String? = null, // 夸克网盘文件ID
     val source: String = "local", // tmdb, douban, local
     val scrapedAt: Long = System.currentTimeMillis(),
     val createdAt: Long = System.currentTimeMillis(),

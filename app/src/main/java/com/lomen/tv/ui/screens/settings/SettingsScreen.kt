@@ -84,10 +84,15 @@ import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
 import com.lomen.tv.domain.model.ResourceLibrary
-import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
-import com.lomen.tv.data.preferences.TmdbApiPreferences
+import com.lomen.tv.ui.viewmodel.VersionUpdateViewModel
+import com.lomen.tv.domain.model.VersionInfo
+import com.lomen.tv.domain.service.DownloadService
+import com.lomen.tv.ui.components.VersionUpdateDialog
+import com.lomen.tv.ui.components.DownloadProgressToast
 import java.util.UUID
 import kotlinx.coroutines.launch
+import com.lomen.tv.data.preferences.TmdbApiPreferences
+import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -100,6 +105,12 @@ fun SettingsScreen(
     var selectedCategory by remember { mutableIntStateOf(0) }
     var showWebDavDialog by remember { mutableStateOf(false) }
     var showEditWebDavDialog by remember { mutableStateOf(libraryToEdit != null) }
+    
+    // 版本更新相关状态
+    val versionUpdateViewModel: VersionUpdateViewModel = hiltViewModel()
+    val versionInfo by versionUpdateViewModel.versionInfo.collectAsState()
+    val hasUpdate by versionUpdateViewModel.hasUpdate.collectAsState()
+    var showVersionUpdateDialog by remember { mutableStateOf(false) }
     
     // 首页设置对话框状态
     var showSortDialog by remember { mutableStateOf(false) }
@@ -134,7 +145,8 @@ fun SettingsScreen(
                 categories = categories,
                 selectedIndex = selectedCategory,
                 onCategorySelected = { selectedCategory = it },
-                onNavigateBack = onNavigateBack
+                onNavigateBack = onNavigateBack,
+                hasUpdate = hasUpdate
             )
 
             // 右侧内容区
@@ -146,6 +158,9 @@ fun SettingsScreen(
                 onShowForceRescrapeDialog = { showForceRescrapeDialog = true },
                 onShowClearWatchHistoryDialog = { showClearWatchHistoryDialog = true },
                 onShowTmdbApiDialog = { showTmdbApiDialog = true },
+                onShowVersionUpdateDialog = { showVersionUpdateDialog = true },
+                hasUpdate = hasUpdate,
+                versionInfo = versionInfo,
                 hasCustomTmdbKey = hasCustomTmdbKey,
                 currentApiKey = currentApiKey,
                 modifier = Modifier.weight(1f)
@@ -220,6 +235,13 @@ fun SettingsScreen(
     val onShowForceRescrapeDialog = { showForceRescrapeDialog = true }
     val onShowClearWatchHistoryDialog = { showClearWatchHistoryDialog = true }
     val onShowTmdbApiDialog = { showTmdbApiDialog = true }
+    
+    // 检查版本更新
+    LaunchedEffect(Unit) {
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        val currentVersionCode = packageInfo.versionCode
+        versionUpdateViewModel.checkForUpdates(currentVersionCode)
+    }
     
     // 监听刮削状态
     val syncState by mediaSyncViewModel.syncState.collectAsState()
@@ -311,6 +333,48 @@ fun SettingsScreen(
         )
     }
     
+    // 版本更新对话框
+    if (showVersionUpdateDialog && versionInfo != null) {
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+        val currentVersionInfo = versionInfo
+        if (currentVersionInfo != null) {
+            VersionUpdateDialog(
+                versionInfo = currentVersionInfo,
+                onUpdate = {
+                    showVersionUpdateDialog = false
+                    // 开始下载
+                    versionUpdateViewModel.startDownloadProgress()
+                    val downloadService = DownloadService(context)
+                    scope.launch {
+                        downloadService.downloadApk(
+                            versionInfo = currentVersionInfo,
+                            onProgress = { progress ->
+                                versionUpdateViewModel.updateDownloadProgress(progress)
+                            },
+                            onComplete = { apkFile ->
+                                versionUpdateViewModel.completeDownload()
+                                if (apkFile != null) {
+                                    downloadService.installApk(apkFile)
+                                }
+                            }
+                        )
+                    }
+                },
+                onCancel = {
+                    showVersionUpdateDialog = false
+                }
+            )
+        }
+    }
+    
+    // 下载进度提示
+    val isDownloading by versionUpdateViewModel.isDownloading.collectAsState()
+    val downloadProgress by versionUpdateViewModel.downloadProgress.collectAsState()
+    if (isDownloading) {
+        DownloadProgressToast(progress = downloadProgress)
+    }
+    
     // 清空最近播放记录确认对话框
     if (showClearWatchHistoryDialog) {
         val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = androidx.hilt.navigation.compose.hiltViewModel()
@@ -321,9 +385,9 @@ fun SettingsScreen(
             onConfirm = {
                 coroutineScope.launch {
                     homeViewModel.watchHistoryService.clearAllWatchHistory()
+                    showClearWatchHistoryDialog = false
+                    showSuccessMessage = "最近播放记录已清空"
                 }
-                showClearWatchHistoryDialog = false
-                showSuccessMessage = "最近播放记录已清空"
             },
             onDismiss = { showClearWatchHistoryDialog = false }
         )
@@ -336,7 +400,8 @@ private fun SettingsSidebar(
     categories: List<SettingCategory>,
     selectedIndex: Int,
     onCategorySelected: (Int) -> Unit,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    hasUpdate: Boolean
 ) {
     Column(
         modifier = Modifier
@@ -440,6 +505,16 @@ private fun SettingsSidebar(
                             else -> TextPrimary
                         }
                     )
+                    // 版本更新红点提示
+                    if (index == 3 && hasUpdate) { // 3 是"关于应用"的索引
+                        Spacer(modifier = Modifier.weight(1f))
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color.Red)
+                        )
+                    }
                 }
             }
         }
@@ -473,6 +548,9 @@ private fun SettingsContent(
     onShowForceRescrapeDialog: () -> Unit,
     onShowClearWatchHistoryDialog: () -> Unit,
     onShowTmdbApiDialog: () -> Unit,
+    onShowVersionUpdateDialog: () -> Unit,
+    hasUpdate: Boolean,
+    versionInfo: VersionInfo?,
     hasCustomTmdbKey: Boolean = false,
     currentApiKey: String = "",
     modifier: Modifier = Modifier
@@ -532,7 +610,11 @@ private fun SettingsContent(
                     item {
                         SectionTitle(title = "关于应用", accentColor = PrimaryYellow)
                         Spacer(modifier = Modifier.height(16.dp))
-                        AboutSection()
+                        AboutSection(
+                            hasUpdate = hasUpdate,
+                            versionInfo = versionInfo,
+                            onVersionUpdateClick = onShowVersionUpdateDialog
+                        )
                     }
                 }
             }
@@ -604,7 +686,7 @@ private fun HomeSettingsSection(
     hasCustomTmdbKey: Boolean = false,
     currentApiKey: String = ""
 ) {
-    val resourceLibraryViewModel: ResourceLibraryViewModel = hiltViewModel()
+    val resourceLibraryViewModel: com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel = hiltViewModel()
     val currentLibrary = resourceLibraryViewModel.getCurrentLibrary()
     
     Column {
@@ -791,19 +873,30 @@ private fun PlaybackSettingsSection(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun AboutSection() {
+private fun AboutSection(
+    hasUpdate: Boolean,
+    versionInfo: VersionInfo?,
+    onVersionUpdateClick: () -> Unit
+) {
     Column {
         Row(
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // 版本更新
+            val currentVersion = "1.0.2"
+            val versionSubtitle = if (hasUpdate && versionInfo != null) {
+                "当前版本: v$currentVersion | 最新版本: v${versionInfo.versionName}"
+            } else {
+                "当前版本: v$currentVersion (稳定版)"
+            }
             InfoCard(
                 icon = Icons.Default.Refresh,
                 iconBackgroundColor = Color.White.copy(alpha = 0.4f),
                 iconTint = Color(0xFFc084fc),
                 title = "版本更新",
-                subtitle = "当前版本 v2.4.0 (稳定版)",
-                badge = "New",
+                subtitle = versionSubtitle,
+                badge = if (hasUpdate) "New" else null,
+                onClick = onVersionUpdateClick,
                 modifier = Modifier.weight(1f)
             )
 
@@ -815,6 +908,7 @@ private fun AboutSection() {
                 title = "应用统计",
                 subtitle = "累计播放时长: 128小时",
                 badge = null,
+                onClick = {},
                 modifier = Modifier.weight(1f)
             )
         }
@@ -990,12 +1084,13 @@ private fun InfoCard(
     title: String,
     subtitle: String,
     badge: String?,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     
     Card(
-        onClick = {},
+        onClick = onClick,
         colors = CardDefaults.colors(
             containerColor = SurfaceDark,
             focusedContainerColor = PrimaryYellow

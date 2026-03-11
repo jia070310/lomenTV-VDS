@@ -15,6 +15,9 @@ interface MovieDao {
     @Query("SELECT * FROM movies ORDER BY updatedAt DESC")
     fun getAllMovies(): Flow<List<MovieEntity>>
 
+    @Query("SELECT * FROM movies")
+    suspend fun getAllMoviesSync(): List<MovieEntity>
+
     @Query("SELECT * FROM movies WHERE type = :type ORDER BY updatedAt DESC")
     fun getMoviesByType(type: MediaType): Flow<List<MovieEntity>>
 

@@ -2,6 +2,9 @@ package com.lomen.tv.domain.service
 
 import android.util.Base64
 import android.util.Log
+import com.lomen.tv.data.local.database.dao.EpisodeDao
+import com.lomen.tv.data.local.database.dao.MovieDao
+import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.repository.ResourceLibraryRepository
 import com.lomen.tv.domain.model.ResourceLibrary
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +25,10 @@ import javax.inject.Singleton
  */
 @Singleton
 class MediaUrlResolver @Inject constructor(
-    private val libraryRepository: ResourceLibraryRepository
+    private val libraryRepository: ResourceLibraryRepository,
+    private val movieDao: MovieDao,
+    private val episodeDao: EpisodeDao,
+    private val webDavMediaDao: WebDavMediaDao
 ) {
     companion object {
         private const val TAG = "MediaUrlResolver"
@@ -37,7 +43,7 @@ class MediaUrlResolver @Inject constructor(
 
     /**
      * 解析视频路径为可播放的URL
-     * 处理WebDAV认证、OpenList/AList API等
+     * 处理WebDAV认证、OpenList/AList API、夸克网盘等
      */
     suspend fun resolvePlaybackUrl(videoPath: String): Result<MediaPlaybackInfo> = withContext(Dispatchers.IO) {
         try {
@@ -54,48 +60,67 @@ class MediaUrlResolver @Inject constructor(
                 videoPath.startsWith(it.name) || videoPath.contains(it.name)
             } ?: libraries.first()
             
-            Log.d(TAG, "Using library: ${library.name}, type: WebDAV")
+            Log.d(TAG, "Using library: ${library.name}, type: ${library.type}")
             
-            // 构建基础URL
-            val baseUrl = "${library.protocol}://${library.host}:${library.port}${library.path}"
-            val fullUrl = if (videoPath.startsWith("http")) {
-                videoPath
-            } else {
-                // 清理路径，移除library name前缀
-                val cleanPath = videoPath
-                    .removePrefix(library.name)
-                    .removePrefix("/")
-                    .trim('/')
-                
-                // URL编码路径中的每个部分（保留斜杠）
-                val encodedPath = cleanPath.split("/").joinToString("/") { segment ->
-                    URLEncoder.encode(segment, "UTF-8")
-                        .replace("+", "%20")  // 空格编码为%20而不是+
+            // 根据资源库类型选择解析方式
+            when (library.type) {
+                ResourceLibrary.LibraryType.WEBDAV -> {
+                    // WebDAV类型
+                    resolveWebDavPlaybackUrl(videoPath, library)
                 }
-                
-                // 确保baseUrl结尾有斜杠，cleanPath开头没有斜杠
-                val normalizedBase = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
-                "$normalizedBase$encodedPath"
-            }
-            
-            Log.d(TAG, "Full URL: $fullUrl")
-            
-            // 先尝试检测是否是OpenList/AList
-            val isOpenList = isOpenListOrAList(baseUrl, library)
-            
-            if (isOpenList) {
-                Log.d(TAG, "Detected OpenList/AList server")
-                resolveOpenListUrl(fullUrl, library, videoPath)
-            } else {
-                // 标准WebDAV，直接返回带认证的URL
-                Log.d(TAG, "Using standard WebDAV")
-                resolveWebDavUrl(fullUrl, library)
+                else -> {
+                    // 其他类型，默认使用WebDAV方式
+                    resolveWebDavPlaybackUrl(videoPath, library)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to resolve playback URL", e)
             Result.failure(e)
         }
     }
+    
+    /**
+     * 解析WebDAV播放URL
+     */
+    private suspend fun resolveWebDavPlaybackUrl(videoPath: String, library: ResourceLibrary): Result<MediaPlaybackInfo> {
+        // 构建基础URL
+        val baseUrl = "${library.protocol}://${library.host}:${library.port}${library.path}"
+        val fullUrl = if (videoPath.startsWith("http")) {
+            videoPath
+        } else {
+            // 清理路径，移除library name前缀
+            val cleanPath = videoPath
+                .removePrefix(library.name)
+                .removePrefix("/")
+                .trim('/')
+            
+            // URL编码路径中的每个部分（保留斜杠）
+            val encodedPath = cleanPath.split("/").joinToString("/") { segment ->
+                URLEncoder.encode(segment, "UTF-8")
+                    .replace("+", "%20")  // 空格编码为%20而不是+
+            }
+            
+            // 确保baseUrl结尾有斜杠，cleanPath开头没有斜杠
+            val normalizedBase = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+            "$normalizedBase$encodedPath"
+        }
+        
+        Log.d(TAG, "Full URL: $fullUrl")
+        
+        // 先尝试检测是否是OpenList/AList
+        val isOpenList = isOpenListOrAList(baseUrl, library)
+        
+        return if (isOpenList) {
+            Log.d(TAG, "Detected OpenList/AList server")
+            resolveOpenListUrl(fullUrl, library, videoPath)
+        } else {
+            // 标准WebDAV，直接返回带认证的URL
+            Log.d(TAG, "Using standard WebDAV")
+            resolveWebDavUrl(fullUrl, library)
+        }
+    }
+    
+
 
     /**
      * 检测是否是OpenList或AList服务

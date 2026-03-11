@@ -185,7 +185,7 @@ class PlayerService @Inject constructor(
         
         // 配置HTTP请求头（如果有）
         val httpDataSourceFactory = if (headers.isNotEmpty()) {
-            android.util.Log.d("PlayerService", "Configuring HTTP headers: ${headers.keys}")
+            android.util.Log.d("PlayerService", "Configuring HTTP headers: ${headers.keys}, values: ${headers.mapValues { if (it.key.lowercase().contains("cookie") || it.key.lowercase().contains("authorization")) "***" else it.value }}")
             DefaultHttpDataSource.Factory()
                 .setConnectTimeoutMs(30_000)
                 .setReadTimeoutMs(30_000)

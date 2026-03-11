@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface WebDavMediaDao {
+    @Query("SELECT * FROM webdav_media")
+    suspend fun getAllSync(): List<WebDavMediaEntity>
+
     @Query("SELECT * FROM webdav_media WHERE libraryId = :libraryId ORDER BY title ASC")
     fun getByLibraryId(libraryId: String): Flow<List<WebDavMediaEntity>>
 
