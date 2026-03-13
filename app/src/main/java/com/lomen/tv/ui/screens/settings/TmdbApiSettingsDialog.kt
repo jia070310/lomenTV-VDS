@@ -104,7 +104,7 @@ fun TmdbApiSettingsDialog(
     }) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.7f)
+                .width(520.dp)  // 固定宽度，避免内容变化时尺寸改变
                 .clip(RoundedCornerShape(16.dp))
                 .background(BackgroundDark)
                 .padding(32.dp)

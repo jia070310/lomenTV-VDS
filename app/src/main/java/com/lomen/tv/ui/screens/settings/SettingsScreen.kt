@@ -883,7 +883,7 @@ private fun AboutSection(
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // 版本更新
-            val currentVersion = "1.0.2"
+            val currentVersion = "1.0.3"
             val versionSubtitle = if (hasUpdate && versionInfo != null) {
                 "当前版本: v$currentVersion | 最新版本: v${versionInfo.versionName}"
             } else {
