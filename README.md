@@ -3,6 +3,7 @@
 一款专为 Android TV 设计的视频播放器，支持 WebDAV 网盘资源导入、智能刮削、记忆续播等功能。
 ![image](https://github.com/jia070310/lomenTV-VDS/blob/main/23.png)
 ## 功能特性
+##新增直播功能
 
 ### 媒体库管理
 - **WebDAV 网盘支持**：连接 OpenList/AList 等 WebDAV 服务
