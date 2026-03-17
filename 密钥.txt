@@ -1,4 +1,0 @@
-签名信息：
-密钥库: lomenTV.jks
-别名: lomenTV
-密码: lomenTV123（请妥善保管）
