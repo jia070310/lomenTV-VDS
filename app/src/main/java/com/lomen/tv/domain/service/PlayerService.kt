@@ -50,6 +50,15 @@ class PlayerService @Inject constructor(
     
     private val _selectedAudioTrackIndex = MutableStateFlow(0)
     val selectedAudioTrackIndex: StateFlow<Int> = _selectedAudioTrackIndex.asStateFlow()
+    
+    // 错误重试机制
+    private var errorRetryCount = 0
+    private val maxErrorRetries = 2
+    private var lastErrorCode = 0
+    private var currentMediaUrl: String? = null
+    private var currentMediaTitle: String? = null
+    private var currentMediaEpisodeTitle: String? = null
+    private var currentStartPosition: Long = 0
 
     @OptIn(UnstableApi::class)
     fun initializePlayer(): ExoPlayer {
@@ -166,6 +175,15 @@ class PlayerService @Inject constructor(
     ) {
         android.util.Log.d("PlayerService", "prepareMedia: url=$url, headers=${headers.keys}, startPositionMs=$startPositionMs")
         
+        // 保存当前媒体信息用于错误重试
+        currentMediaUrl = url
+        currentMediaTitle = title
+        currentMediaEpisodeTitle = episodeTitle
+        currentStartPosition = startPositionMs
+        // 重置错误重试计数（成功准备新媒体时重置）
+        errorRetryCount = 0
+        lastErrorCode = 0
+        
         // 确保播放器已初始化且有效
         if (exoPlayer == null) {
             android.util.Log.d("PlayerService", "Player is null, initializing...")
@@ -208,14 +226,8 @@ class PlayerService @Inject constructor(
                     .build()
             )
         
-        // 如果指定了起始位置，使用 ClippingConfiguration 设置起始位置
-        if (startPositionMs > 0) {
-            mediaItemBuilder.setClippingConfiguration(
-                MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(startPositionMs)
-                    .build()
-            )
-        }
+        // 注意：不使用 ClippingConfiguration 设置起始位置，因为这会改变 duration 的计算
+        // 起始位置将在播放器准备好后通过 seekTo 设置
         
         // 添加字幕
         if (subtitles.isNotEmpty()) {
@@ -243,25 +255,22 @@ class PlayerService @Inject constructor(
                 
                 setMediaSource(mediaSource)
                 prepare()
-                // 如果指定了起始位置，先不自动播放，等待在 PlayerViewModel 中验证位置后再播放
+                // 如果指定了起始位置，先 seekTo 然后播放
                 if (startPositionMs > 0) {
-                    android.util.Log.d("PlayerService", "Start position set via ClippingConfiguration: $startPositionMs ms, playWhenReady=false")
-                    playWhenReady = false // 先不播放，等待位置验证完成
-                } else {
-                    playWhenReady = true
+                    android.util.Log.d("PlayerService", "Seeking to start position: $startPositionMs ms")
+                    seekTo(startPositionMs)
                 }
+                playWhenReady = true
             } else {
                 // 没有 headers，直接使用 setMediaItem
-                // 如果指定了起始位置，已通过 ClippingConfiguration 设置
                 setMediaItem(mediaItem)
                 prepare()
-                // 如果指定了起始位置，先不自动播放，等待在 PlayerViewModel 中验证位置后再播放
+                // 如果指定了起始位置，先 seekTo 然后播放
                 if (startPositionMs > 0) {
-                    android.util.Log.d("PlayerService", "Start position set via ClippingConfiguration: $startPositionMs ms, playWhenReady=false")
-                    playWhenReady = false // 先不播放，等待位置验证完成
-                } else {
-                    playWhenReady = true
+                    android.util.Log.d("PlayerService", "Seeking to start position: $startPositionMs ms")
+                    seekTo(startPositionMs)
                 }
+                playWhenReady = true
             }
         }
     }
@@ -403,6 +412,27 @@ class PlayerService @Inject constructor(
                 android.util.Log.e("PlayerService", "Current media item: ${player.currentMediaItem?.localConfiguration?.uri}")
             }
             
+            // 检查是否应该自动重试
+            val shouldAutoRetry = errorRetryCount < maxErrorRetries && 
+                (error.errorCode == lastErrorCode || lastErrorCode == 0) &&
+                currentMediaUrl != null
+            
+            if (shouldAutoRetry) {
+                errorRetryCount++
+                lastErrorCode = error.errorCode
+                android.util.Log.w("PlayerService", "播放错误，尝试自动重试 ($errorRetryCount/$maxErrorRetries)...")
+                
+                // 延迟后自动重试
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    retryCurrentMedia()
+                }, 1000)
+                return
+            }
+            
+            // 重置重试计数
+            errorRetryCount = 0
+            lastErrorCode = 0
+            
             // 构建更详细的错误信息
             val errorMessage = when (error.errorCode) {
                 PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败"
@@ -424,11 +454,38 @@ class PlayerService @Inject constructor(
                 type = PlayerState.Type.ERROR,
                 error = errorMessage
             )
+        }
+        
+        /**
+         * 自动重试当前媒体
+         */
+        private fun retryCurrentMedia() {
+            val url = currentMediaUrl ?: return
+            android.util.Log.d("PlayerService", "自动重试播放: $url")
             
-            // 对于某些可恢复的错误，尝试自动重试
-            if (error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
-                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED) {
-                android.util.Log.w("PlayerService", "Network error detected, player may auto-retry")
+            try {
+                // 清除错误状态
+                _playerState.value = _playerState.value.copy(
+                    type = PlayerState.Type.IDLE,
+                    error = null
+                )
+                
+                // 重新准备媒体
+                prepareMedia(
+                    url = url,
+                    title = currentMediaTitle,
+                    episodeTitle = currentMediaEpisodeTitle,
+                    headers = emptyMap(),
+                    subtitles = emptyList(),
+                    startPositionMs = currentStartPosition
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("PlayerService", "自动重试失败: ${e.message}")
+                errorRetryCount = 0
+                _playerState.value = _playerState.value.copy(
+                    type = PlayerState.Type.ERROR,
+                    error = "播放失败，请手动重试"
+                )
             }
         }
 

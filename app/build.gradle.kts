@@ -15,8 +15,8 @@ android {
         applicationId = "com.lomen.tv"
         minSdk = 21
         targetSdk = 34
-        versionCode = 10003
-        versionName = "1.0.3"
+        versionCode = 10007
+        versionName = "1.0.7"
 
         // TV-specific configurations
         vectorDrawables.useSupportLibrary = true
@@ -113,6 +113,7 @@ dependencies {
 
     // Media3 / ExoPlayer
     implementation("androidx.media3:media3-exoplayer:1.2.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
     implementation("androidx.media3:media3-session:1.2.1")
 
@@ -133,6 +134,7 @@ dependencies {
 
     // QR Code
     implementation("com.google.zxing:core:3.5.3")
+    implementation("io.github.alexzhirkevich:qrose:1.0.0-beta02")
 
     // HTTP Server
     implementation("org.nanohttpd:nanohttpd:2.3.1")

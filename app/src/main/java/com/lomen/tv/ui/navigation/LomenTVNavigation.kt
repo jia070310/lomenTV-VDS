@@ -2,6 +2,11 @@ package com.lomen.tv.ui.navigation
 
 import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
@@ -10,6 +15,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.lomen.tv.data.preferences.LiveSettingsPreferences
 import com.lomen.tv.domain.model.MediaType
 import com.lomen.tv.ui.player.PlayerActivity
 import com.lomen.tv.ui.screens.category.CategoryScreen
@@ -18,6 +24,7 @@ import com.lomen.tv.ui.screens.home.HomeScreen
 import com.lomen.tv.ui.screens.home.HomeViewModel
 import com.lomen.tv.ui.screens.home.ResourceLibraryScreen
 import com.lomen.tv.ui.screens.library.LibraryScreen
+import com.lomen.tv.ui.screens.live.LiveScreen
 import com.lomen.tv.ui.screens.recentwatching.RecentWatchingScreen
 import com.lomen.tv.ui.screens.search.SearchScreen
 import com.lomen.tv.ui.screens.settings.SettingsScreen
@@ -48,6 +55,7 @@ sealed class Screen(val route: String) {
         fun createRoute(mediaType: MediaType) = "category/${mediaType.name}"
     }
     data object RecentWatching : Screen("recent_watching")
+    data object Live : Screen("live")
 }
 
 @Composable
@@ -58,13 +66,32 @@ fun LomenTVNavigation(
     val sharedResourceLibraryViewModel: ResourceLibraryViewModel = hiltViewModel()
     val sharedMediaSyncViewModel: MediaSyncViewModel = hiltViewModel()
     
+    // 获取LiveSettingsPreferences
+    val context = LocalContext.current
+    val liveSettingsPreferences = remember { LiveSettingsPreferences(context) }
+    
+    // 检查是否自动进入直播
+    val autoEnterLive by liveSettingsPreferences.autoEnterLive.collectAsState(initial = false)
+    
+    // 在NavHost级别维护自动导航状态，确保整个APP会话中只自动导航一次
+    // 使用 remember 确保APP进程重启后状态重置
+    var hasAutoNavigatedToLive by remember { mutableStateOf(false) }
+    
     NavHost(
         navController = navController,
         startDestination = Screen.Home.route
     ) {
         composable(Screen.Home.route) {
-            val context = LocalContext.current
             val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = hiltViewModel()
+            
+            // 自动进入直播 - 只在首次显示Home且设置开启时跳转
+            // 监听 autoEnterLive 变化，当值为 true 且还没导航过时自动跳转
+            LaunchedEffect(autoEnterLive, hasAutoNavigatedToLive) {
+                if (autoEnterLive && !hasAutoNavigatedToLive) {
+                    hasAutoNavigatedToLive = true
+                    navController.navigate(Screen.Live.route)
+                }
+            }
             
             HomeScreen(
                 onNavigateToDetail = { mediaId ->
@@ -84,6 +111,9 @@ fun LomenTVNavigation(
                 },
                 onNavigateToRecentWatching = {
                     navController.navigate(Screen.RecentWatching.route)
+                },
+                onNavigateToLive = {
+                    navController.navigate(Screen.Live.route)
                 },
                 onPlayFromHistory = { historyItem ->
                     // 在协程中获取播放信息并启动播放器
@@ -108,6 +138,7 @@ fun LomenTVNavigation(
         }
         
         composable(Screen.Library.route) {
+            val libraryContext = LocalContext.current
             LibraryScreen(
                 onNavigateBack = {
                     navController.popBackStack()
@@ -240,7 +271,7 @@ fun LomenTVNavigation(
         }
 
         composable(Screen.RecentWatching.route) {
-            val context = LocalContext.current
+            val recentContext = LocalContext.current
             val homeViewModel: HomeViewModel = hiltViewModel()
             RecentWatchingScreen(
                 onNavigateBack = {
@@ -251,7 +282,7 @@ fun LomenTVNavigation(
                     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
                         val playbackInfo = homeViewModel.getPlaybackInfo(historyItem.mediaId, historyItem.episodeId)
                         if (playbackInfo != null && playbackInfo.videoPath != null) {
-                            val intent = Intent(context, PlayerActivity::class.java).apply {
+                            val intent = Intent(recentContext, PlayerActivity::class.java).apply {
                                 putExtra(PlayerActivity.EXTRA_VIDEO_URL, playbackInfo.videoPath)
                                 putExtra(PlayerActivity.EXTRA_TITLE, playbackInfo.title)
                                 putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, playbackInfo.episodeTitle)
@@ -259,9 +290,17 @@ fun LomenTVNavigation(
                                 putExtra(PlayerActivity.EXTRA_EPISODE_ID, playbackInfo.episodeId)
                                 putExtra(PlayerActivity.EXTRA_START_POSITION, playbackInfo.startPosition)
                             }
-                            context.startActivity(intent)
+                            recentContext.startActivity(intent)
                         }
                     }
+                }
+            )
+        }
+
+        composable(Screen.Live.route) {
+            LiveScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
                 }
             )
         }

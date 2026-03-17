@@ -29,7 +29,9 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,7 +39,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import com.lomen.tv.service.WebDavConfigServer
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -62,7 +66,10 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -91,6 +98,7 @@ import com.lomen.tv.ui.components.VersionUpdateDialog
 import com.lomen.tv.ui.components.DownloadProgressToast
 import java.util.UUID
 import kotlinx.coroutines.launch
+import com.lomen.tv.data.preferences.LiveSettingsPreferences
 import com.lomen.tv.data.preferences.TmdbApiPreferences
 import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
 
@@ -129,6 +137,7 @@ fun SettingsScreen(
         SettingCategory("资源管理", Icons.Default.CloudUpload),
         SettingCategory("首页设置", Icons.Default.Settings),
         SettingCategory("播放设置", Icons.Default.PlayArrow),
+        SettingCategory("直播设置", Icons.Default.LiveTv),
         SettingCategory("关于应用", Icons.Default.Info)
     )
 
@@ -506,7 +515,7 @@ private fun SettingsSidebar(
                         }
                     )
                     // 版本更新红点提示
-                    if (index == 3 && hasUpdate) { // 3 是"关于应用"的索引
+                    if (index == 4 && hasUpdate) { // 4 是"关于应用"的索引
                         Spacer(modifier = Modifier.weight(1f))
                         Box(
                             modifier = Modifier
@@ -533,7 +542,8 @@ private fun SettingsSidebar(
         Text(
             text = "系统时间：$currentTime",
             style = MaterialTheme.typography.bodySmall,
-            color = TextMuted
+            color = TextMuted,
+            modifier = Modifier.padding(bottom = 16.dp) // 增加底部内边距，避免被截断
         )
     }
 }
@@ -606,7 +616,14 @@ private fun SettingsContent(
                         )
                     }
                 }
-                3 -> { // 关于应用
+                3 -> { // 直播设置
+                    item {
+                        SectionTitle(title = "直播设置", accentColor = PrimaryYellow)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        LiveSettingsSection()
+                    }
+                }
+                4 -> { // 关于应用
                     item {
                         SectionTitle(title = "关于应用", accentColor = PrimaryYellow)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -763,6 +780,11 @@ private fun HomeSettingsSection(
 private fun PlaybackSettingsSection(
     onShowClearWatchHistoryDialog: () -> Unit = {}
 ) {
+    val playerSettingsPreferences = androidx.hilt.navigation.compose.hiltViewModel<com.lomen.tv.ui.viewmodel.PlayerSettingsViewModel>()
+    val autoSkipEnabled by playerSettingsPreferences.autoSkipIntroOutro.collectAsState(initial = true)
+    val rememberPlaybackEnabled by playerSettingsPreferences.rememberPlaybackPosition.collectAsState(initial = true)
+    val coroutineScope = rememberCoroutineScope()
+    
     Column {
         // 快进快退时长
         SettingListItem(
@@ -781,11 +803,19 @@ private fun PlaybackSettingsSection(
         Spacer(modifier = Modifier.height(2.dp))
 
         // 自动跳过片头片尾
-        var autoSkipEnabled by remember { mutableStateOf(true) }
         var autoSkipFocused by remember { mutableStateOf(false) }
+        val autoSkipEnabledState by rememberUpdatedState(autoSkipEnabled)
         SettingListItem(
             title = "自动跳过片头片尾",
             subtitle = "智能识别影视内容，自动跳转至正片",
+            onClick = {
+                // 点击整行也切换开关
+                val newValue = !autoSkipEnabledState
+                android.util.Log.d("SettingsScreen", "Auto skip intro outro row clicked, new value: $newValue")
+                coroutineScope.launch {
+                    playerSettingsPreferences.setAutoSkipIntroOutro(newValue)
+                }
+            },
             trailing = { itemFocused ->
                 Box(
                     modifier = Modifier
@@ -798,7 +828,7 @@ private fun PlaybackSettingsSection(
                 ) {
                     Switch(
                         checked = autoSkipEnabled,
-                        onCheckedChange = { autoSkipEnabled = it },
+                        onCheckedChange = null, // TV 上使用 onClick 处理
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = if ((itemFocused || autoSkipFocused) && autoSkipEnabled) {
@@ -820,11 +850,19 @@ private fun PlaybackSettingsSection(
         Spacer(modifier = Modifier.height(2.dp))
 
         // 记忆续播功能
-        var rememberPlaybackEnabled by remember { mutableStateOf(true) }
         var rememberPlaybackFocused by remember { mutableStateOf(false) }
+        val rememberPlaybackEnabledState by rememberUpdatedState(rememberPlaybackEnabled)
         SettingListItem(
             title = "记忆续播功能",
             subtitle = "自动记录播放进度，下次打开即刻续播",
+            onClick = {
+                // 点击整行也切换开关
+                val newValue = !rememberPlaybackEnabledState
+                android.util.Log.d("SettingsScreen", "Remember playback position row clicked, new value: $newValue")
+                coroutineScope.launch {
+                    playerSettingsPreferences.setRememberPlaybackPosition(newValue)
+                }
+            },
             trailing = { itemFocused ->
                 Box(
                     modifier = Modifier
@@ -837,7 +875,7 @@ private fun PlaybackSettingsSection(
                 ) {
                     Switch(
                         checked = rememberPlaybackEnabled,
-                        onCheckedChange = { rememberPlaybackEnabled = it },
+                        onCheckedChange = null, // TV 上使用 onClick 处理
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
                             checkedTrackColor = if ((itemFocused || rememberPlaybackFocused) && rememberPlaybackEnabled) {
@@ -1031,12 +1069,13 @@ private fun SettingCard(
 private fun SettingListItem(
     title: String,
     subtitle: String,
-    trailing: @Composable (Boolean) -> Unit
+    trailing: @Composable (Boolean) -> Unit,
+    onClick: (() -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
     
     Card(
-        onClick = {},
+        onClick = { onClick?.invoke() },
         colors = CardDefaults.colors(
             containerColor = SurfaceDark,
             focusedContainerColor = PrimaryYellow
@@ -1702,4 +1741,807 @@ private fun ScrapeProgressToast(
             }
         }
     }
+}
+
+/**
+ * 直播设置区域 - 列表卡片样式
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun LiveSettingsSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val liveSettingsPreferences = remember { com.lomen.tv.data.preferences.LiveSettingsPreferences(context) }
+    
+    // 状态
+    var showLiveSourceHistory by remember { mutableStateOf(false) }
+    var showEpgHistory by remember { mutableStateOf(false) }
+    var showUaHistory by remember { mutableStateOf(false) }
+    var showWebConfigQr by remember { mutableStateOf(false) }
+    
+    // 收集当前设置值
+    val liveSourceUrl by liveSettingsPreferences.liveSourceUrl.collectAsState(initial = "")
+    val epgUrl by liveSettingsPreferences.epgUrl.collectAsState(initial = "")
+    val userAgent by liveSettingsPreferences.userAgent.collectAsState(initial = "")
+    val channelChangeFlip by liveSettingsPreferences.channelChangeFlip.collectAsState(initial = false)
+    val channelNoSelectEnable by liveSettingsPreferences.channelNoSelectEnable.collectAsState(initial = true)
+    val epgEnable by liveSettingsPreferences.epgEnable.collectAsState(initial = true)
+    val autoEnterLive by liveSettingsPreferences.autoEnterLive.collectAsState(initial = false)
+    val bootStartup by liveSettingsPreferences.bootStartup.collectAsState(initial = false)
+    val autoRefreshInterval by liveSettingsPreferences.autoRefreshInterval.collectAsState(initial = 0)
+    val liveSourceHistory by liveSettingsPreferences.liveSourceHistory.collectAsState(initial = emptySet())
+    val epgUrlHistory by liveSettingsPreferences.epgUrlHistory.collectAsState(initial = emptySet())
+    val userAgentHistory by liveSettingsPreferences.userAgentHistory.collectAsState(initial = emptySet())
+    
+    // 获取WiFi IP
+    val wifiIpAddress = remember { getWifiIpAddress(context) }
+    val serverUrl = "http://$wifiIpAddress:8893/live"
+    
+    // 启动 WebDav 配置服务器用于直播设置
+    val webDavServer = remember { WebDavConfigServer(context, 8893) }
+    DisposableEffect(showWebConfigQr) {
+        if (showWebConfigQr) {
+            webDavServer.startServerWithLiveConfig(
+                onWebDavConfig = { /* 在直播设置页面不处理 WebDAV 配置 */ },
+                onLiveConfig = { config ->
+                    scope.launch {
+                        if (config.liveSourceUrl.isNotBlank()) {
+                            liveSettingsPreferences.setLiveSourceUrl(config.liveSourceUrl)
+                            liveSettingsPreferences.addLiveSourceToHistory(
+                                config.liveSourceName.takeIf { it.isNotBlank() } ?: "自定义源",
+                                config.liveSourceUrl
+                            )
+                        }
+                        if (config.epgUrl.isNotBlank()) {
+                            liveSettingsPreferences.setEpgUrl(config.epgUrl)
+                            liveSettingsPreferences.addEpgUrlToHistory(config.epgUrl)
+                        }
+                        if (config.userAgent.isNotBlank()) {
+                            liveSettingsPreferences.setUserAgent(config.userAgent)
+                            liveSettingsPreferences.addUserAgentToHistory(config.userAgent)
+                        }
+                    }
+                }
+            )
+        }
+        onDispose {
+            if (showWebConfigQr) {
+                webDavServer.stopServer()
+            }
+        }
+    }
+    
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 直播源配置卡片
+        LiveSettingListCard(
+            icon = Icons.Default.LiveTv,
+            iconBackgroundColor = Color(0xFFf59e0b).copy(alpha = 0.2f),
+            iconTint = Color(0xFFf59e0b),
+            title = "直播源配置",
+            onClick = { showLiveSourceHistory = true }
+        )
+        
+        // 节目单配置卡片
+        LiveSettingListCard(
+            icon = Icons.Default.Timer,
+            iconBackgroundColor = Color(0xFF60a5fa).copy(alpha = 0.2f),
+            iconTint = Color(0xFF60a5fa),
+            title = "节目单配置",
+            onClick = { showEpgHistory = true }
+        )
+        
+        // 自定义 User-Agent 卡片
+        LiveSettingListCard(
+            icon = Icons.Default.Settings,
+            iconBackgroundColor = Color(0xFF34d399).copy(alpha = 0.2f),
+            iconTint = Color(0xFF34d399),
+            title = "自定义 User-Agent",
+            onClick = { showUaHistory = true }
+        )
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        // 开关设置 - 使用卡片样式
+        // 换台反转
+        SettingListItem(
+            title = "换台方向反转",
+            subtitle = "上下键换台方向反转",
+            trailing = { itemFocused ->
+                Switch(
+                    checked = channelChangeFlip,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = com.lomen.tv.ui.theme.SuccessGreen,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = Color(0xFF444444)
+                    )
+                )
+            },
+            onClick = {
+                scope.launch { liveSettingsPreferences.setChannelChangeFlip(!channelChangeFlip) }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 数字选台
+        SettingListItem(
+            title = "启用数字选台",
+            subtitle = "使用数字键快速输入频道号",
+            trailing = { itemFocused ->
+                Switch(
+                    checked = channelNoSelectEnable,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = com.lomen.tv.ui.theme.SuccessGreen,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = Color(0xFF444444)
+                    )
+                )
+            },
+            onClick = {
+                scope.launch { liveSettingsPreferences.setChannelNoSelectEnable(!channelNoSelectEnable) }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 启用节目单
+        SettingListItem(
+            title = "启用节目单",
+            subtitle = "显示频道节目信息",
+            trailing = { itemFocused ->
+                Switch(
+                    checked = epgEnable,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = com.lomen.tv.ui.theme.SuccessGreen,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = Color(0xFF444444)
+                    )
+                )
+            },
+            onClick = {
+                scope.launch { liveSettingsPreferences.setEpgEnable(!epgEnable) }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 打开APP直接进入直播界面
+        SettingListItem(
+            title = "打开直接进入直播",
+            subtitle = "启动APP后自动进入直播界面",
+            trailing = { itemFocused ->
+                Switch(
+                    checked = autoEnterLive,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = com.lomen.tv.ui.theme.SuccessGreen,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = Color(0xFF444444)
+                    )
+                )
+            },
+            onClick = {
+                scope.launch { liveSettingsPreferences.setAutoEnterLive(!autoEnterLive) }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 开机启动
+        SettingListItem(
+            title = "开机启动",
+            subtitle = "设备开机后自动启动APP并进入直播",
+            trailing = { itemFocused ->
+                Switch(
+                    checked = bootStartup,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = com.lomen.tv.ui.theme.SuccessGreen,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = Color(0xFF444444)
+                    )
+                )
+            },
+            onClick = {
+                scope.launch { liveSettingsPreferences.setBootStartup(!bootStartup) }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        // 定时刷新直播源
+        SettingListItem(
+            title = "定时刷新直播源",
+            subtitle = "每隔指定时间自动刷新直播源（当前：${if (autoRefreshInterval > 0) "${autoRefreshInterval}小时" else "已关闭"}）",
+            trailing = { itemFocused ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // 选项按钮：关闭、1小时、2小时、4小时、6小时、12小时
+                    listOf(0, 1, 2, 4, 6, 12).forEach { hours ->
+                        val label = if (hours == 0) "关闭" else "${hours}h"
+                        val isSelected = autoRefreshInterval == hours
+                        androidx.tv.material3.Button(
+                            onClick = { scope.launch { liveSettingsPreferences.setAutoRefreshInterval(hours) } },
+                            colors = androidx.tv.material3.ButtonDefaults.colors(
+                                containerColor = if (isSelected) com.lomen.tv.ui.theme.PrimaryYellow else Color(0xFF333333),
+                                contentColor = if (isSelected) Color.Black else Color.White,
+                            ),
+                            shape = androidx.tv.material3.ButtonDefaults.shape(
+                                shape = RoundedCornerShape(8.dp)
+                            ),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.border(
+                                            width = 2.dp,
+                                            color = Color(0xFFB8860B), // 深金色描边
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                        ) {
+                            Text(label, fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            onClick = {
+                // 循环切换：0 -> 1 -> 2 -> 4 -> 6 -> 12 -> 0
+                val options = listOf(0, 1, 2, 4, 6, 12)
+                val currentIndex = options.indexOf(autoRefreshInterval)
+                val nextIndex = (currentIndex + 1) % options.size
+                scope.launch { liveSettingsPreferences.setAutoRefreshInterval(options[nextIndex]) }
+            }
+        )
+    }
+    
+    // 直播源历史列表弹窗
+    val currentLiveSourceItem = liveSourceHistory.find { it.second == liveSourceUrl }
+    HistoryListDialog(
+        title = "历史直播源",
+        showDialogProvider = { showLiveSourceHistory },
+        onDismissRequest = { showLiveSourceHistory = false },
+        items = liveSourceHistory.toList(),
+        currentItem = currentLiveSourceItem,
+        onSelected = { item ->
+            val (name, url) = item
+            scope.launch { 
+                liveSettingsPreferences.setLiveSourceUrl(url)
+                liveSettingsPreferences.addLiveSourceToHistory(name, url)
+            }
+            showLiveSourceHistory = false
+        },
+        onDeleted = { item ->
+            val (_, url) = item
+            scope.launch { liveSettingsPreferences.removeLiveSourceFromHistory(url) }
+        },
+        onAddNew = {
+            showLiveSourceHistory = false
+            showWebConfigQr = true
+        },
+        itemContent = { item, isSelected, isFocused ->
+            val (name, url) = item
+            Pair(name, url)
+        },
+        isBuiltInItem = { item ->
+            LiveSettingsPreferences.BUILT_IN_LIVE_SOURCES.any { it.second == item.second }
+        },
+        addNewText = "添加其他直播源"
+    )
+    
+    // 节目单历史列表弹窗
+    HistoryListDialog(
+        title = "历史节目单",
+        showDialogProvider = { showEpgHistory },
+        onDismissRequest = { showEpgHistory = false },
+        items = epgUrlHistory.toList(),
+        currentItem = epgUrl.takeIf { it.isNotBlank() },
+        onSelected = { url ->
+            scope.launch { 
+                liveSettingsPreferences.setEpgUrl(url)
+                liveSettingsPreferences.addEpgUrlToHistory(url)
+            }
+            showEpgHistory = false
+        },
+        onDeleted = { url ->
+            scope.launch { liveSettingsPreferences.removeEpgUrlFromHistory(url) }
+        },
+        onAddNew = {
+            showEpgHistory = false
+            showWebConfigQr = true
+        },
+        itemContent = { item, isSelected, isFocused ->
+            Pair(
+                if (item.contains("51zmt")) "默认节目单" else "自定义节目单",
+                item
+            )
+        },
+        isBuiltInItem = { item ->
+            LiveSettingsPreferences.BUILT_IN_EPG_URLS.contains(item)
+        },
+        addNewText = "添加其他节目单"
+    )
+    
+    // User-Agent 历史列表弹窗
+    HistoryListDialog(
+        title = "历史 User-Agent",
+        showDialogProvider = { showUaHistory },
+        onDismissRequest = { showUaHistory = false },
+        items = userAgentHistory.toList(),
+        currentItem = userAgent.takeIf { it.isNotBlank() },
+        onSelected = { ua ->
+            scope.launch { 
+                liveSettingsPreferences.setUserAgent(ua)
+                liveSettingsPreferences.addUserAgentToHistory(ua)
+            }
+            showUaHistory = false
+        },
+        onDeleted = { ua ->
+            scope.launch { liveSettingsPreferences.removeUserAgentFromHistory(ua) }
+        },
+        onAddNew = {
+            showUaHistory = false
+            showWebConfigQr = true
+        },
+        itemContent = { item, isSelected, isFocused ->
+            Pair(
+                if (item.contains("ExoPlayer")) "默认UA" else "自定义UA",
+                item
+            )
+        },
+        isBuiltInItem = { item ->
+            LiveSettingsPreferences.BUILT_IN_USER_AGENTS.contains(item)
+        },
+        addNewText = "添加其他 User-Agent"
+    )
+    
+    // 网页配置二维码弹窗 - 在历史列表中通过"添加其他"触发
+    QrCodeDialog(
+        text = serverUrl,
+        title = "网页配置",
+        description = "使用手机扫描二维码访问网页配置界面\n可批量添加直播源、节目单和UA",
+        showDialogProvider = { showWebConfigQr },
+        onDismissRequest = { showWebConfigQr = false }
+    )
+}
+
+/**
+ * 直播源配置对话框
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun LiveSourceSettingsDialog(
+    currentUrl: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var url by remember { mutableStateOf(currentUrl) }
+    val focusRequester = remember { FocusRequester() }
+    
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            modifier = Modifier
+                .width(600.dp)
+                .padding(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    text = "配置直播源",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "支持 M3U/M3U8 格式的直播源链接",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // URL 输入框
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { newValue: String -> url = newValue },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    placeholder = { Text("请输入直播源 URL") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = SurfaceDark,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextMuted,
+                        focusedBorderColor = PrimaryYellow,
+                        unfocusedBorderColor = TextMuted.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // 按钮行
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted
+                        )
+                    ) {
+                        Text("取消")
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Button(
+                        onClick = { onSave(url) },
+                        colors = ButtonDefaults.colors(
+                            containerColor = PrimaryYellow,
+                            contentColor = BackgroundDark
+                        ),
+                        enabled = url.isNotBlank()
+                    ) {
+                        Text("保存")
+                    }
+                }
+            }
+        }
+    }
+    
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+}
+
+/**
+ * 节目单配置对话框
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun EpgUrlSettingsDialog(
+    currentUrl: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var url by remember { mutableStateOf(currentUrl) }
+    val focusRequester = remember { FocusRequester() }
+    
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            modifier = Modifier
+                .width(600.dp)
+                .padding(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    text = "配置节目单",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "支持 XMLTV 格式的 EPG 节目单链接",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // URL 输入框
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { newValue: String -> url = newValue },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    placeholder = { Text("请输入 EPG 节目单 URL") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = SurfaceDark,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextMuted,
+                        focusedBorderColor = PrimaryYellow,
+                        unfocusedBorderColor = TextMuted.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // 按钮行
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted
+                        )
+                    ) {
+                        Text("取消")
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Button(
+                        onClick = { onSave(url) },
+                        colors = ButtonDefaults.colors(
+                            containerColor = PrimaryYellow,
+                            contentColor = BackgroundDark
+                        ),
+                        enabled = url.isNotBlank()
+                    ) {
+                        Text("保存")
+                    }
+                }
+            }
+        }
+    }
+    
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+}
+
+/**
+ * User-Agent 配置对话框
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun UserAgentSettingsDialog(
+    currentUserAgent: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var userAgent by remember { mutableStateOf(currentUserAgent) }
+    val focusRequester = remember { FocusRequester() }
+    
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            modifier = Modifier
+                .width(600.dp)
+                .padding(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    text = "配置 User-Agent",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "自定义播放器请求时使用的 User-Agent",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // UA 输入框
+                OutlinedTextField(
+                    value = userAgent,
+                    onValueChange = { newValue: String -> userAgent = newValue },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    placeholder = { Text("请输入 User-Agent（留空使用默认）") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = SurfaceDark,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextMuted,
+                        focusedBorderColor = PrimaryYellow,
+                        unfocusedBorderColor = TextMuted.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // 按钮行
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted
+                        )
+                    ) {
+                        Text("取消")
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Button(
+                        onClick = { onSave(userAgent) },
+                        colors = ButtonDefaults.colors(
+                            containerColor = PrimaryYellow,
+                            contentColor = BackgroundDark
+                        )
+                    ) {
+                        Text("保存")
+                    }
+                }
+            }
+        }
+    }
+    
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+}
+
+/**
+ * 网页配置提示对话框
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun WebConfigInfoDialog(
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val wifiIpAddress = remember { getWifiIpAddress(context) }
+    
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            modifier = Modifier
+                .width(600.dp)
+                .padding(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(
+                    text = "网页端配置",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "请在电脑或手机浏览器中访问以下地址：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextMuted
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Card(
+                    onClick = {},
+                    colors = CardDefaults.colors(containerColor = BackgroundDark),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "http://$wifiIpAddress:8893",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = PrimaryYellow,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = "网页端支持配置：\n• 直播源 URL\n• 节目单 URL\n• 自定义 User-Agent\n• WebDAV 网盘",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.colors(
+                        containerColor = PrimaryYellow,
+                        contentColor = BackgroundDark
+                    ),
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("知道了")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 获取 WiFi IP 地址
+ */
+private fun getWifiIpAddress(context: android.content.Context): String {
+    // 方法1: 通过 WiFiManager 获取
+    try {
+        val wifiManager = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        val ipInt = wifiManager.connectionInfo.ipAddress
+        if (ipInt != 0) {
+            val ip = String.format(
+                "%d.%d.%d.%d",
+                ipInt and 0xff,
+                ipInt shr 8 and 0xff,
+                ipInt shr 16 and 0xff,
+                ipInt shr 24 and 0xff
+            )
+            if (ip != "0.0.0.0") return ip
+        }
+    } catch (e: Exception) {
+        // 忽略错误，尝试其他方法
+    }
+    
+    // 方法2: 通过网络接口获取
+    try {
+        val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+        while (interfaces.hasMoreElements()) {
+            val networkInterface = interfaces.nextElement()
+            val addresses = networkInterface.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val address = addresses.nextElement()
+                if (!address.isLoopbackAddress && address is java.net.Inet4Address) {
+                    val ip = address.hostAddress
+                    if (ip != null && !ip.startsWith("0.")) {
+                        return ip
+                    }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        // 忽略错误
+    }
+    
+    // 方法3: 返回常见局域网 IP 作为备选
+    return "192.168.1.100"
 }

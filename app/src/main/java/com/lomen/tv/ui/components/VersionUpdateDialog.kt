@@ -2,6 +2,7 @@ package com.lomen.tv.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -27,11 +29,12 @@ import androidx.compose.ui.unit.sp
 import com.lomen.tv.domain.model.VersionInfo
 import com.lomen.tv.ui.theme.PrimaryYellow
 import androidx.tv.material3.*
+import androidx.compose.ui.ExperimentalComposeUiApi
 
 /**
  * 版本更新对话框
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun VersionUpdateDialog(
     versionInfo: VersionInfo,
@@ -39,16 +42,22 @@ fun VersionUpdateDialog(
     onCancel: () -> Unit
 ) {
     // 创建焦点请求器
-    val focusRequester = remember { FocusRequester() }
+    val cancelFocusRequester = remember { FocusRequester() }
+    val updateFocusRequester = remember { FocusRequester() }
     
-    // 当对话框显示时请求焦点
+    // 当对话框显示时请求焦点到取消按钮
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        cancelFocusRequester.requestFocus()
     }
     
     // 使用tv-material3的Card作为背景
     Card(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .focusProperties { 
+                // 阻止焦点逃出对话框
+                exit = { FocusRequester.Cancel }
+            },
         colors = CardDefaults.colors(
             containerColor = Color.Black.copy(alpha = 0.7f)
         ),
@@ -61,7 +70,11 @@ fun VersionUpdateDialog(
             Card(
                 modifier = Modifier
                     .width(600.dp)
-                    .heightIn(min = 400.dp, max = 600.dp),
+                    .heightIn(min = 400.dp, max = 600.dp)
+                    .focusProperties { 
+                        // 阻止焦点逃出对话框
+                        exit = { FocusRequester.Cancel }
+                    },
                 colors = CardDefaults.colors(
                     containerColor = Color(0xFF333333)
                 ),
@@ -120,16 +133,9 @@ fun VersionUpdateDialog(
                         Box(
                             modifier = Modifier
                                 .padding(horizontal = 8.dp)
-                                .focusRequester(focusRequester)
+                                .focusRequester(cancelFocusRequester)
+                                .focusable()
                                 .onFocusChanged { cancelButtonFocused = it.isFocused }
-                                .onKeyEvent { keyEvent ->
-                                    // 拦截上键，防止焦点逃出对话框
-                                    if (keyEvent.key == Key.DirectionUp) {
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
                                 .clickable(
                                     onClick = onCancel,
                                     indication = null,
@@ -155,15 +161,9 @@ fun VersionUpdateDialog(
                         Box(
                             modifier = Modifier
                                 .padding(horizontal = 8.dp)
+                                .focusRequester(updateFocusRequester)
+                                .focusable()
                                 .onFocusChanged { updateButtonFocused = it.isFocused }
-                                .onKeyEvent { keyEvent ->
-                                    // 拦截上键，防止焦点逃出对话框
-                                    if (keyEvent.key == Key.DirectionUp) {
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
                                 .clickable(
                                     onClick = onUpdate,
                                     indication = null,

@@ -114,6 +114,7 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToCategory: (com.lomen.tv.domain.model.MediaType) -> Unit = {},
     onNavigateToRecentWatching: () -> Unit = {},
+    onNavigateToLive: () -> Unit = {},
     onPlayFromHistory: (com.lomen.tv.domain.service.WatchHistoryItem) -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
     resourceLibraryViewModel: com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel = hiltViewModel(),
@@ -477,7 +478,7 @@ fun HomeScreen(
                 selectedTab = index
                 when (index) {
                     0 -> { /* Home - already here */ }
-                    1 -> { /* Live - not implemented yet */ }
+                    1 -> onNavigateToLive() // 导航到直播页面
                     2 -> { /* Hot - not implemented yet */ }
                     3 -> onNavigateToLibrary() // 导航到资源库页面
                     4 -> onNavigateToSettings()

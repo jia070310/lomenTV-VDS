@@ -124,6 +124,7 @@ fun PlayerScreen(
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showEpisodeListDialog by remember { mutableStateOf(false) }
     var showQualityDialog by remember { mutableStateOf(false) }
+    var showSkipConfigDialog by remember { mutableStateOf(false) }
     
     // 获取字幕、音轨、倍速数据
     val availableSubtitles by viewModel.availableSubtitles.collectAsState()
@@ -132,6 +133,13 @@ fun PlayerScreen(
     val selectedAudioTrackIndex by viewModel.selectedAudioTrackIndex.collectAsState()
     val availableSpeeds = remember { viewModel.getAvailableSpeeds() }
     val currentSpeed = remember { mutableStateOf(1.0f) }
+    
+    // 跳过片头片尾配置
+    val skipConfig by viewModel.skipConfig.collectAsState()
+    
+    // 播放器设置
+    val playerSettingsViewModel = androidx.hilt.navigation.compose.hiltViewModel<com.lomen.tv.ui.viewmodel.PlayerSettingsViewModel>()
+    val autoSkipIntroOutro by playerSettingsViewModel.autoSkipIntroOutro.collectAsState(initial = true)
     
     // 剧集列表和清晰度选项
     var episodeList by remember { mutableStateOf<List<PlayerViewModel.EpisodeListItem>>(emptyList()) }
@@ -147,6 +155,16 @@ fun PlayerScreen(
             android.util.Log.e("PlayerScreen", "Player error: ${playerState.error}")
             errorMessage = playerState.error!!
             showErrorDialog = true
+        }
+    }
+    
+    // 监听播放完成状态，自动播放下一集
+    LaunchedEffect(playerState.type) {
+        if (playerState.type == PlayerState.Type.ENDED) {
+            android.util.Log.d("PlayerScreen", "播放完成，准备播放下一集")
+            // 延迟1秒后自动播放下一集
+            kotlinx.coroutines.delay(1000)
+            viewModel.seekToNext()
         }
     }
     val focusRequester = remember { FocusRequester() }
@@ -166,6 +184,9 @@ fun PlayerScreen(
     LaunchedEffect(mediaId, episodeId) {
         if (mediaId != null) {
             viewModel.setMediaInfo(mediaId, episodeId)
+            // 加载跳过片头片尾配置
+            // 使用电视剧级别的配置（对于WebDAV媒体，使用系列ID而不是单集ID）
+            viewModel.loadSkipConfigForSeries(mediaId, seasonNumber = 0)
         }
     }
     
@@ -218,9 +239,27 @@ fun PlayerScreen(
         }
     }
     
-    // 更新当前播放速度
-    LaunchedEffect(playerState.isPlaying) {
-        // 可以从 PlayerService 获取当前速度，这里简化处理
+    // 更新当前播放速度，并检查跳过片头
+    LaunchedEffect(playerState.isPlaying, skipConfig, autoSkipIntroOutro) {
+        // 当开始播放时，且配置已加载，且自动跳过开关打开时，检查是否需要跳过片头
+        if (playerState.isPlaying && skipConfig != null && autoSkipIntroOutro) {
+            val skipped = viewModel.checkAndSkipIntro()
+            if (skipped) {
+                // 显示跳过片头提示
+                android.widget.Toast.makeText(context, "已跳过片头", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    
+    // 监听播放进度，检查是否需要跳过片尾
+    LaunchedEffect(playerState.currentPosition, skipConfig, autoSkipIntroOutro) {
+        if (playerState.isPlaying && playerState.duration > 0 && skipConfig != null && autoSkipIntroOutro) {
+            val skipped = viewModel.checkAndSkipOutro()
+            if (skipped) {
+                // 显示跳过片尾提示
+                android.widget.Toast.makeText(context, "已跳过片尾", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     
     // 注意：起始位置现在在 prepareMedia 时直接设置，不需要在这里再次跳转
@@ -537,7 +576,14 @@ fun PlayerScreen(
                         // 在当前播放器中切换剧集，不启动新 Activity
                         viewModel.prepareMedia(videoUrl, currentTitle, newEpisodeTitle, 0L)
                     }
-                }
+                },
+                // 跳过片头片尾
+                onShowSkipConfigDialog = { showSkipConfigDialog = true },
+                onSkipIntro = { viewModel.skipIntro() },
+                onSkipOutro = { viewModel.skipOutro() },
+                // 只有在自动跳过开关打开时才显示跳过按钮
+                skipIntroAvailable = autoSkipIntroOutro && skipConfig?.skipIntroEnabled == true && playerState.currentPosition < (skipConfig?.introDuration ?: 0),
+                skipOutroAvailable = autoSkipIntroOutro && skipConfig?.skipOutroEnabled == true && playerState.duration > 0 && playerState.currentPosition > (playerState.duration - (skipConfig?.outroDuration ?: 0))
             )
         }
         
@@ -594,6 +640,40 @@ fun PlayerScreen(
                             showQualityDialog = false
                         }
                     }
+                }
+            )
+        }
+        
+        // 跳过片头片尾设置对话框
+        if (showSkipConfigDialog) {
+            // 如果没有配置，创建一个初始值为0的配置
+            val configToShow = skipConfig ?: com.lomen.tv.data.local.database.entity.SkipConfigEntity(
+                mediaId = mediaId ?: "",
+                seasonNumber = 0,
+                introDuration = 0L,  // 新剧集默认片头为0
+                outroDuration = 0L,  // 新剧集默认片尾为0
+                skipIntroEnabled = true,
+                skipOutroEnabled = true
+            )
+            SkipConfigDialog(
+                show = showSkipConfigDialog,
+                config = configToShow,
+                scopeTitle = currentEpisodeTitle ?: title ?: "",
+                currentPosition = playerState.currentPosition,
+                duration = playerState.duration,
+                onDismiss = { showSkipConfigDialog = false },
+                onSave = { config ->
+                    viewModel.saveSkipConfig(config)
+                    showSkipConfigDialog = false
+                },
+                onReset = {
+                    viewModel.resetSkipConfigToDefault()
+                },
+                onSetCurrentAsIntroEnd = {
+                    viewModel.setCurrentPositionAsIntroEnd()
+                },
+                onSetCurrentAsOutroStart = {
+                    viewModel.setCurrentPositionAsOutroStart()
                 }
             )
         }
@@ -759,7 +839,13 @@ private fun PlayerControls(
     // 选集相关
     episodes: List<PlayerViewModel.EpisodeListItem> = emptyList(),
     currentEpisodeId: String? = null,
-    onSelectEpisode: (PlayerViewModel.EpisodeListItem) -> Unit = {}
+    onSelectEpisode: (PlayerViewModel.EpisodeListItem) -> Unit = {},
+    // 跳过片头片尾
+    onShowSkipConfigDialog: () -> Unit = {},
+    onSkipIntro: () -> Unit = {},
+    onSkipOutro: () -> Unit = {},
+    skipIntroAvailable: Boolean = false,
+    skipOutroAvailable: Boolean = false
 ) {
     // 选集弹出菜单状态
     var showEpisodePopup by remember { mutableStateOf(false) }
@@ -1065,6 +1151,18 @@ private fun PlayerControls(
                         }
                     },
                     isHighlighted = false,
+                    isLocked = isLocked
+                )
+
+                // 跳过片头片尾按钮
+                ControlPillButton(
+                    text = "跳过",
+                    onClick = { 
+                        if (!isLocked) {
+                            onShowSkipConfigDialog()
+                            onUpdateInteractionTime()
+                        }
+                    },
                     isLocked = isLocked
                 )
             }

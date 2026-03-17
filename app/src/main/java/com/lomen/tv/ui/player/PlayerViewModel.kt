@@ -6,6 +6,8 @@ import androidx.media3.common.Player
 import com.lomen.tv.data.local.database.dao.EpisodeDao
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
+import com.lomen.tv.data.local.database.entity.SkipConfigEntity
+import com.lomen.tv.data.repository.SkipConfigRepository
 import com.lomen.tv.domain.model.MediaType
 import com.lomen.tv.domain.service.MediaUrlResolver
 import com.lomen.tv.domain.service.PlayerService
@@ -32,7 +34,9 @@ class PlayerViewModel @Inject constructor(
     private val mediaUrlResolver: MediaUrlResolver,
     private val episodeDao: EpisodeDao,
     private val movieDao: MovieDao,
-    private val webDavMediaDao: WebDavMediaDao
+    private val webDavMediaDao: WebDavMediaDao,
+    private val skipConfigRepository: SkipConfigRepository,
+    private val playerSettingsPreferences: com.lomen.tv.data.preferences.PlayerSettingsPreferences
 ) : ViewModel() {
 
     val playerState: StateFlow<PlayerState> = playerService.playerState
@@ -70,6 +74,16 @@ class PlayerViewModel @Inject constructor(
     
     private fun saveWatchProgressSync() {
         val mediaId = currentMediaId ?: return
+        
+        // 检查记忆续播开关是否打开
+        val rememberEnabled = kotlinx.coroutines.runBlocking {
+            playerSettingsPreferences.rememberPlaybackPosition.first()
+        }
+        if (!rememberEnabled) {
+            android.util.Log.d("PlayerViewModel", "Remember playback position is disabled, skipping sync save")
+            return
+        }
+        
         val position = playerService.getCurrentPosition()
         val duration = playerService.getDuration()
 
@@ -103,6 +117,14 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val mediaId = currentMediaId ?: return@launch
+                
+                // 检查记忆续播开关是否打开
+                val rememberEnabled = playerSettingsPreferences.rememberPlaybackPosition.first()
+                if (!rememberEnabled) {
+                    android.util.Log.d("PlayerViewModel", "Remember playback position is disabled, skipping immediate save")
+                    return@launch
+                }
+                
                 val duration = playerService.getDuration()
                 val position = playerService.getCurrentPosition()
                 
@@ -327,16 +349,21 @@ class PlayerViewModel @Inject constructor(
         val mediaId = currentMediaId ?: return
         val currentEpisodeId = currentEpisodeId
         
+        android.util.Log.d("PlayerViewModel", "seekToNext: currentMediaId=$mediaId, currentEpisodeId=$currentEpisodeId")
+        
         viewModelScope.launch {
             try {
                 val nextEpisode = getNextEpisode(mediaId, currentEpisodeId)
+                android.util.Log.d("PlayerViewModel", "seekToNext: nextEpisode=$nextEpisode")
                 if (nextEpisode != null) {
                     // 有下一集，跳转
                     val playbackInfo = watchHistoryService.getPlaybackInfo(
                         nextEpisode.mediaId,
                         nextEpisode.episodeId
                     )
+                    android.util.Log.d("PlayerViewModel", "seekToNext: playbackInfo=$playbackInfo")
                     if (playbackInfo != null && playbackInfo.videoPath != null) {
+                        android.util.Log.d("PlayerViewModel", "seekToNext: 导航到下一集 videoPath=${playbackInfo.videoPath}")
                         onNavigateToEpisode?.invoke(
                             playbackInfo.videoPath,
                             playbackInfo.title,
@@ -634,7 +661,7 @@ class PlayerViewModel @Inject constructor(
             android.util.Log.d("PlayerViewModel", "Next WebDAV episode: S${nextSeasonNum}E${nextEpisodeNum}")
             return EpisodeInfo(
                 mediaId = nextEpisode.id,
-                episodeId = null, // WebDAV 媒体没有单独的 episodeId
+                episodeId = nextEpisode.id, // WebDAV 媒体的 episodeId 就是 mediaId
                 seasonNumber = nextSeasonNum,
                 episodeNumber = nextEpisodeNum ?: 0
             )
@@ -1266,6 +1293,15 @@ class PlayerViewModel @Inject constructor(
             return
         }
         
+        // 检查记忆续播开关是否打开
+        val rememberEnabled = kotlinx.coroutines.runBlocking {
+            playerSettingsPreferences.rememberPlaybackPosition.first()
+        }
+        if (!rememberEnabled) {
+            android.util.Log.d("PlayerViewModel", "Remember playback position is disabled, skipping save")
+            return
+        }
+        
         val position = playerService.getCurrentPosition()
         val duration = playerService.getDuration()
 
@@ -1294,5 +1330,247 @@ class PlayerViewModel @Inject constructor(
         releasePlayer()
     }
 
+    // ==================== 跳过片头片尾功能 ====================
+    
+    private val _skipConfig = MutableStateFlow<SkipConfigEntity?>(null)
+    val skipConfig: StateFlow<SkipConfigEntity?> = _skipConfig.asStateFlow()
+    
+    private var currentSeasonNumber: Int = 0
+    private var hasSkippedIntro = false
+    private var hasSkippedOutro = false
+    private var currentSeriesMediaId: String? = null  // 系列级别的mediaId（用于电视剧）
+    
+    /**
+     * 加载跳过配置
+     */
+    fun loadSkipConfig(mediaId: String, seasonNumber: Int = 0) {
+        currentSeasonNumber = seasonNumber
+        // 重置跳过状态（切换剧集时）
+        resetSkipStatus()
+        viewModelScope.launch {
+            skipConfigRepository.getConfigFlow(mediaId, seasonNumber).collect { config ->
+                _skipConfig.value = config
+            }
+        }
+    }
+    
+    /**
+     * 加载电视剧级别的跳过配置（对所有集数生效）
+     */
+    fun loadSkipConfigForSeries(mediaId: String, seasonNumber: Int = 0) {
+        viewModelScope.launch {
+            // 尝试获取媒体信息以确定系列ID
+            val movie = movieDao.getMovieById(mediaId)
+            val webDavMedia = if (movie == null) {
+                webDavMediaDao.getById(mediaId)
+            } else null
+            
+            // 确定系列ID：对于电视剧，使用tmdbId或基础标题
+            val seriesMediaId = when {
+                movie != null && movie.type == MediaType.TV_SHOW -> {
+                    // MovieEntity 类型的电视剧，使用 mediaId
+                    movie.id
+                }
+                webDavMedia != null && webDavMedia.type == MediaType.TV_SHOW -> {
+                    // WebDAV 类型的电视剧，使用 tmdbId 或基础标题
+                    if (!webDavMedia.tmdbId.isNullOrBlank()) {
+                        "tmdb_${webDavMedia.tmdbId}"
+                    } else {
+                        // 使用基础标题作为系列ID
+                        val baseTitle = webDavMedia.title
+                            .replace(Regex("第\\d+集.*"), "")
+                            .replace(Regex("\\s+"), " ")
+                            .trim()
+                        "series_${webDavMedia.libraryId}_${baseTitle}"
+                    }
+                }
+                else -> {
+                    // 电影或其他类型，使用原mediaId
+                    mediaId
+                }
+            }
+            
+            android.util.Log.d("PlayerViewModel", "loadSkipConfigForSeries: original=$mediaId, series=$seriesMediaId")
+            
+            // 保存系列ID用于后续保存配置
+            currentSeriesMediaId = seriesMediaId
+            
+            // 加载系列级别的配置
+            loadSkipConfig(seriesMediaId, seasonNumber)
+        }
+    }
+    
+    /**
+     * 获取当前跳过配置（如果没有则返回默认配置）
+     */
+    fun getCurrentSkipConfig(): SkipConfigEntity {
+        return _skipConfig.value ?: SkipConfigEntity(
+            mediaId = currentMediaId ?: "",
+            seasonNumber = currentSeasonNumber
+        )
+    }
+    
+    /**
+     * 保存跳过配置（使用系列级别的mediaId）
+     */
+    fun saveSkipConfig(config: SkipConfigEntity) {
+        viewModelScope.launch {
+            // 使用系列级别的mediaId（如果存在）
+            val mediaId = currentSeriesMediaId ?: config.mediaId
+            val configToSave = config.copy(
+                mediaId = mediaId,
+                seasonNumber = currentSeasonNumber
+            )
+            android.util.Log.d("PlayerViewModel", "saveSkipConfig: mediaId=$mediaId, introDuration=${config.introDuration}, outroDuration=${config.outroDuration}")
+            skipConfigRepository.saveConfig(configToSave)
+        }
+    }
+    
+    /**
+     * 更新片头时长
+     */
+    fun updateIntroDuration(duration: Long) {
+        val mediaId = currentSeriesMediaId ?: currentMediaId ?: return
+        viewModelScope.launch {
+            skipConfigRepository.updateIntroDuration(mediaId, currentSeasonNumber, duration)
+        }
+    }
+    
+    /**
+     * 更新片尾时长
+     */
+    fun updateOutroDuration(duration: Long) {
+        val mediaId = currentSeriesMediaId ?: currentMediaId ?: return
+        viewModelScope.launch {
+            skipConfigRepository.updateOutroDuration(mediaId, currentSeasonNumber, duration)
+        }
+    }
+    
+    /**
+     * 切换片头跳过开关
+     */
+    fun toggleSkipIntro() {
+        val mediaId = currentSeriesMediaId ?: currentMediaId ?: return
+        val currentConfig = _skipConfig.value
+        val newEnabled = !(currentConfig?.skipIntroEnabled ?: true)
+        viewModelScope.launch {
+            skipConfigRepository.updateSkipIntroEnabled(mediaId, currentSeasonNumber, newEnabled)
+        }
+    }
+    
+    /**
+     * 切换片尾跳过开关
+     */
+    fun toggleSkipOutro() {
+        val mediaId = currentSeriesMediaId ?: currentMediaId ?: return
+        val currentConfig = _skipConfig.value
+        val newEnabled = !(currentConfig?.skipOutroEnabled ?: true)
+        viewModelScope.launch {
+            skipConfigRepository.updateSkipOutroEnabled(mediaId, currentSeasonNumber, newEnabled)
+        }
+    }
+    
+    /**
+     * 重置为默认值
+     */
+    fun resetSkipConfigToDefault() {
+        val mediaId = currentSeriesMediaId ?: currentMediaId ?: return
+        viewModelScope.launch {
+            skipConfigRepository.resetToDefault(mediaId, currentSeasonNumber)
+        }
+    }
+    
+    /**
+     * 检查并自动跳过片头
+     * 在播放开始时调用
+     * @return 是否执行了跳过操作
+     */
+    fun checkAndSkipIntro(): Boolean {
+        val config = _skipConfig.value
+        android.util.Log.d("PlayerViewModel", "checkAndSkipIntro: config=$config, hasSkippedIntro=$hasSkippedIntro")
+        if (config?.skipIntroEnabled == true && !hasSkippedIntro) {
+            val introEnd = config.introDuration
+            val currentPosition = playerService.getCurrentPosition()
+            android.util.Log.d("PlayerViewModel", "checkAndSkipIntro: introEnd=$introEnd, currentPosition=$currentPosition")
+            if (currentPosition < introEnd && introEnd > 0) {
+                playerService.seekTo(introEnd)
+                hasSkippedIntro = true
+                android.util.Log.d("PlayerViewModel", "自动跳过片头到: $introEnd ms")
+                return true
+            }
+        }
+        return false
+    }
+    
+    /**
+     * 检查并自动跳过片尾
+     * 在播放进度更新时调用
+     */
+    fun checkAndSkipOutro(): Boolean {
+        val config = _skipConfig.value
+        val duration = playerService.getDuration()
+        
+        if (config?.skipOutroEnabled == true && duration > 0 && !hasSkippedOutro) {
+            val outroStart = duration - config.outroDuration
+            val currentPosition = playerService.getCurrentPosition()
+            
+            // 当播放到片尾前5秒时，自动跳过到下一集
+            if (currentPosition >= outroStart - 5000) {
+                hasSkippedOutro = true
+                android.util.Log.d("PlayerViewModel", "自动跳过片尾，准备播放下一集")
+                seekToNext()
+                return true
+            }
+        }
+        return false
+    }
+    
+    /**
+     * 手动跳过片头
+     */
+    fun skipIntro() {
+        val config = getCurrentSkipConfig()
+        val introEnd = config.introDuration
+        playerService.seekTo(introEnd)
+        hasSkippedIntro = true
+        android.util.Log.d("PlayerViewModel", "手动跳过片头到: $introEnd ms")
+    }
+    
+    /**
+     * 手动跳过片尾
+     */
+    fun skipOutro() {
+        seekToNext()
+        hasSkippedOutro = true
+        android.util.Log.d("PlayerViewModel", "手动跳过片尾，播放下一集")
+    }
+    
+    /**
+     * 将当前时间设为片头结束时间
+     */
+    fun setCurrentPositionAsIntroEnd() {
+        val position = playerService.getCurrentPosition()
+        updateIntroDuration(position)
+    }
+    
+    /**
+     * 将当前时间设为片尾开始时间
+     */
+    fun setCurrentPositionAsOutroStart() {
+        val duration = playerService.getDuration()
+        val position = playerService.getCurrentPosition()
+        if (duration > 0 && position > 0) {
+            val outroDuration = duration - position
+            updateOutroDuration(outroDuration)
+        }
+    }
+    
+    /**
+     * 重置跳过状态（切换剧集时调用）
+     */
+    fun resetSkipStatus() {
+        hasSkippedIntro = false
+        hasSkippedOutro = false
+    }
 
 }
