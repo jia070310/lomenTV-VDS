@@ -41,3 +41,18 @@ Thumbs.db
 app/build/
 app/release/
 app/debug/
+
+# APK files
+*.apk
+
+# Private files
+密钥.txt
+*.key
+*.secret
+
+# Temporary files
+*.html
+*.md
+!README.md
+!LICENSE
+!NOTIFICATIONS_CONFIG.md
