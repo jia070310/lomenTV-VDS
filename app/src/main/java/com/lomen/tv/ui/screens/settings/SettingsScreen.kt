@@ -921,7 +921,7 @@ private fun AboutSection(
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // 版本更新
-            val currentVersion = "1.0.3"
+            val currentVersion = "1.0.7"
             val versionSubtitle = if (hasUpdate && versionInfo != null) {
                 "当前版本: v$currentVersion | 最新版本: v${versionInfo.versionName}"
             } else {
@@ -938,13 +938,21 @@ private fun AboutSection(
                 modifier = Modifier.weight(1f)
             )
 
-            // 应用统计
+            // 应用统计 - 总播放时间
+            val totalPlayTime by remember { mutableStateOf(0L) } // 从数据库读取总播放时间(毫秒)
+            val hours = totalPlayTime / (1000 * 60 * 60)
+            val minutes = (totalPlayTime / (1000 * 60)) % 60
+            val timeText = when {
+                hours > 0 -> "总播放时间: ${hours}小时${minutes}分钟"
+                minutes > 0 -> "总播放时间: ${minutes}分钟"
+                else -> "总播放时间: 0分钟"
+            }
             InfoCard(
                 icon = Icons.Default.Timer,
                 iconBackgroundColor = Color.White.copy(alpha = 0.4f),
                 iconTint = TextMuted,
                 title = "应用统计",
-                subtitle = "累计播放时长: 128小时",
+                subtitle = timeText,
                 badge = null,
                 onClick = {},
                 modifier = Modifier.weight(1f)
@@ -980,9 +988,15 @@ private fun AboutSection(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "一款专为Android TV设计的视频播放器，支持网盘资源导入、智能跳过片头片尾、记忆续播等功能。",
+                    text = "一款专为Android TV设计的视频播放器，支持WebDAV网盘资源导入、IPTV直播、智能跳过片头片尾、记忆续播等功能。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "GitHub: https://github.com/jia070310/lomenTV-VDS",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
