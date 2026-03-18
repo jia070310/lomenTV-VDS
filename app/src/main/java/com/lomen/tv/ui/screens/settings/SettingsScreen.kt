@@ -114,6 +114,10 @@ fun SettingsScreen(
     var showWebDavDialog by remember { mutableStateOf(false) }
     var showEditWebDavDialog by remember { mutableStateOf(libraryToEdit != null) }
     
+    // 焦点管理
+    val sidebarFocusRequester = remember { FocusRequester() }
+    val contentFocusRequester = remember { FocusRequester() }
+    
     // 版本更新相关状态
     val versionUpdateViewModel: VersionUpdateViewModel = hiltViewModel()
     val versionInfo by versionUpdateViewModel.versionInfo.collectAsState()
@@ -155,7 +159,9 @@ fun SettingsScreen(
                 selectedIndex = selectedCategory,
                 onCategorySelected = { selectedCategory = it },
                 onNavigateBack = onNavigateBack,
-                hasUpdate = hasUpdate
+                hasUpdate = hasUpdate,
+                sidebarFocusRequester = sidebarFocusRequester,
+                contentFocusRequester = contentFocusRequester
             )
 
             // 右侧内容区
@@ -172,7 +178,9 @@ fun SettingsScreen(
                 versionInfo = versionInfo,
                 hasCustomTmdbKey = hasCustomTmdbKey,
                 currentApiKey = currentApiKey,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                contentFocusRequester = contentFocusRequester,
+                sidebarFocusRequester = sidebarFocusRequester
             )
         }
         
@@ -403,14 +411,16 @@ fun SettingsScreen(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun SettingsSidebar(
     categories: List<SettingCategory>,
     selectedIndex: Int,
     onCategorySelected: (Int) -> Unit,
     onNavigateBack: () -> Unit,
-    hasUpdate: Boolean
+    hasUpdate: Boolean,
+    sidebarFocusRequester: FocusRequester,
+    contentFocusRequester: FocusRequester
 ) {
     Column(
         modifier = Modifier
@@ -474,6 +484,7 @@ private fun SettingsSidebar(
         categories.forEachIndexed { index, category ->
             val isSelected = index == selectedIndex
             var isFocused by remember { mutableStateOf(false) }
+            val itemFocusRequester = remember { FocusRequester() }
             Button(
                 onClick = { onCategorySelected(index) },
                 colors = ButtonDefaults.colors(
@@ -486,7 +497,12 @@ private fun SettingsSidebar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
+                    .focusRequester(itemFocusRequester)
                     .onFocusChanged { isFocused = it.isFocused }
+                    .focusProperties {
+                        // 右键移动到右侧内容区
+                        right = contentFocusRequester
+                    }
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -548,7 +564,7 @@ private fun SettingsSidebar(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun SettingsContent(
     selectedCategory: Int,
@@ -563,7 +579,9 @@ private fun SettingsContent(
     versionInfo: VersionInfo?,
     hasCustomTmdbKey: Boolean = false,
     currentApiKey: String = "",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    contentFocusRequester: FocusRequester,
+    sidebarFocusRequester: FocusRequester
 ) {
     Box(
         modifier = modifier
@@ -577,6 +595,11 @@ private fun SettingsContent(
                 )
             )
             .padding(48.dp)
+            .focusRequester(contentFocusRequester)
+            .focusProperties {
+                // 左键返回到侧边栏
+                left = sidebarFocusRequester
+            }
     ) {
         androidx.tv.foundation.lazy.list.TvLazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -677,7 +700,8 @@ private fun ResourceImportSection(
             title = "连通网盘",
             subtitle = "支持二级文件夹扫描与极速预览",
             onClick = { /* TODO: 网盘配置 */ },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            isFirstItem = true
         )
 
         // 添加WebDAV网盘
@@ -715,7 +739,8 @@ private fun HomeSettingsSection(
             title = "媒体分类排序",
             subtitle = "自定义首页显示顺序（电视剧、电影、综艺等）",
             onClick = onShowSortDialog,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            isFirstItem = true
         )
         
         Spacer(modifier = Modifier.height(16.dp))
@@ -797,7 +822,8 @@ private fun PlaybackSettingsSection(
                     color = if (itemFocused) Color.Black else PrimaryYellow,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
-            }
+            },
+            isFirstItem = true
         )
 
         Spacer(modifier = Modifier.height(2.dp))
@@ -935,7 +961,8 @@ private fun AboutSection(
                 subtitle = versionSubtitle,
                 badge = if (hasUpdate) "New" else null,
                 onClick = onVersionUpdateClick,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                isFirstItem = true
             )
 
             // 应用统计 - 总播放时间
@@ -1018,9 +1045,18 @@ private fun SettingCard(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isFirstItem: Boolean = false
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    
+    // 第一个项目自动获取焦点
+    LaunchedEffect(Unit) {
+        if (isFirstItem) {
+            focusRequester.requestFocus()
+        }
+    }
     
     Card(
         onClick = onClick,
@@ -1035,6 +1071,7 @@ private fun SettingCard(
         ),
         modifier = modifier
             .height(120.dp)
+            .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Column(
@@ -1078,15 +1115,24 @@ private fun SettingCard(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun SettingListItem(
     title: String,
     subtitle: String,
     trailing: @Composable (Boolean) -> Unit,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    isFirstItem: Boolean = false
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    
+    // 第一个项目自动获取焦点
+    LaunchedEffect(Unit) {
+        if (isFirstItem) {
+            focusRequester.requestFocus()
+        }
+    }
     
     Card(
         onClick = { onClick?.invoke() },
@@ -1101,6 +1147,7 @@ private fun SettingListItem(
         ),
         modifier = Modifier
             .fillMaxWidth()
+            .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(
@@ -1128,7 +1175,7 @@ private fun SettingListItem(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun InfoCard(
     icon: ImageVector,
@@ -1138,9 +1185,18 @@ private fun InfoCard(
     subtitle: String,
     badge: String?,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isFirstItem: Boolean = false
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    
+    // 第一个项目自动获取焦点
+    LaunchedEffect(Unit) {
+        if (isFirstItem) {
+            focusRequester.requestFocus()
+        }
+    }
     
     Card(
         onClick = onClick,
@@ -1155,6 +1211,7 @@ private fun InfoCard(
         ),
         modifier = modifier
             .height(100.dp)
+            .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(
@@ -1792,7 +1849,7 @@ private fun LiveSettingsSection() {
     val serverUrl = "http://$wifiIpAddress:8893/live"
     
     // 启动 WebDav 配置服务器用于直播设置
-    val webDavServer = remember { WebDavConfigServer(context, 8893) }
+    val webDavServer = remember { WebDavConfigServer.getInstance(context, 8893) }
     DisposableEffect(showWebConfigQr) {
         if (showWebConfigQr) {
             webDavServer.startServerWithLiveConfig(
@@ -1834,7 +1891,8 @@ private fun LiveSettingsSection() {
             iconBackgroundColor = Color(0xFFf59e0b).copy(alpha = 0.2f),
             iconTint = Color(0xFFf59e0b),
             title = "直播源配置",
-            onClick = { showLiveSourceHistory = true }
+            onClick = { showLiveSourceHistory = true },
+            isFirstItem = true
         )
         
         // 节目单配置卡片

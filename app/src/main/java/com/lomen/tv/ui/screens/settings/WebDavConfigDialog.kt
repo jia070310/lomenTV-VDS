@@ -646,7 +646,7 @@ private fun WebDavQrCodeConfig(
     onConfigReceived: (WebDavConfigServer.WebDavConfig) -> Unit
 ) {
     val context = LocalContext.current
-    val server = remember { WebDavConfigServer(context, 8893) }
+    val server = remember { WebDavConfigServer.getInstance(context, 8893) }
     var serverUrl by remember { mutableStateOf("") }
     var isServerRunning by remember { mutableStateOf(false) }
     var configReceived by remember { mutableStateOf<WebDavConfigServer.WebDavConfig?>(null) }

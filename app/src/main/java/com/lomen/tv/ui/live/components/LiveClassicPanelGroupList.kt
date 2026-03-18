@@ -152,7 +152,7 @@ private fun LiveClassicPanelGroupItem(
                 ),
             colors = ListItemDefaults.colors(
                 focusedContainerColor = PrimaryYellow,
-                selectedContainerColor = Color.Transparent,
+                selectedContainerColor = PrimaryYellow.copy(alpha = 0.3f),
                 containerColor = Color.Transparent,
             ),
             selected = isSelectedProvider(),

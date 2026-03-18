@@ -9,11 +9,11 @@ import java.io.IOException
 
 /**
  * TMDB API 配置服务
- * 复用 WebDAV 配置服务的端口 8893，通过不同路径区分
+ * 使用端口 8895，避免与其他服务冲突
  */
 class TmdbApiConfigServer(
     private val context: Context,
-    port: Int = 8893
+    port: Int = 8895
 ) : NanoHTTPD(port) {
 
     companion object {

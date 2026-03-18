@@ -1,4 +1,4 @@
-@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class)
+@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package com.lomen.tv.ui.screens.settings
 
@@ -35,7 +35,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +62,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyListState
 import androidx.tv.foundation.lazy.list.items
+import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -204,16 +212,39 @@ fun <T> HistoryListDialog(
     addNewText: String = "添加其他",
     emptyText: String = "暂无历史记录"
 ) {
+    // 删除确认弹窗状态
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var itemToDelete by remember { mutableStateOf<T?>(null) }
+    
+    // 内置源提示弹窗状态
+    var showBuiltInTip by remember { mutableStateOf(false) }
+    
+    // 当子弹窗显示时，不响应 dismiss
+    val isSubDialogShowing = showDeleteConfirm || showBuiltInTip
+
     if (showDialogProvider()) {
         AlertDialog(
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = !isSubDialogShowing,
+                dismissOnClickOutside = false
+            ),
             modifier = modifier.width(600.dp),
-            onDismissRequest = onDismissRequest,
+            onDismissRequest = { 
+                if (!isSubDialogShowing) {
+                    onDismissRequest()
+                }
+            },
             containerColor = Color(0xFF2a2a2a),
             confirmButton = {
-                if (onDeleted != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        text = "短按切换；长按3秒删除历史记录",
+                        text = if (onDeleted != null) "确定键切换；菜单键删除" else "确定键切换",
                         color = PrimaryYellow,
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -243,10 +274,6 @@ fun <T> HistoryListDialog(
                         val isSelected = currentItem == item
                         val isBuiltIn = isBuiltInItem(item)
                         val (headline, supporting) = itemContent(item, isSelected, isFocused)
-                        
-                        // 长按检测状态
-                        var isLongPressing by remember { mutableStateOf(false) }
-                        var longPressProgress by remember { mutableStateOf(0f) }
 
                         LaunchedEffect(Unit) {
                             if (item == currentItem && !hasFocused) {
@@ -254,37 +281,31 @@ fun <T> HistoryListDialog(
                                 focusRequester.requestFocus()
                             }
                         }
-                        
-                        // 长按检测协程
-                        LaunchedEffect(isLongPressing) {
-                            if (isLongPressing && !isBuiltIn && onDeleted != null) {
-                                val startTime = System.currentTimeMillis()
-                                while (isLongPressing && longPressProgress < 1f) {
-                                    val elapsed = System.currentTimeMillis() - startTime
-                                    longPressProgress = (elapsed / 3000f).coerceIn(0f, 1f)
-                                    if (longPressProgress >= 1f) {
-                                        // 长按3秒，触发删除
-                                        onDeleted(item)
-                                        isLongPressing = false
-                                    }
-                                    delay(50)
-                                }
-                            } else {
-                                longPressProgress = 0f
-                            }
-                        }
 
                         ListItem(
                             modifier = Modifier
                                 .focusRequester(focusRequester)
-                                .onFocusChanged { isFocused = it.isFocused || it.hasFocus },
+                                .onFocusChanged { isFocused = it.isFocused || it.hasFocus }
+                                .onPreviewKeyEvent { keyEvent ->
+                                    // 按菜单键或 Q 键删除（非内置源）
+                                    if ((keyEvent.key == Key.Menu || keyEvent.key == Key.Q) && keyEvent.type == KeyEventType.KeyUp) {
+                                        if (isBuiltIn) {
+                                            showBuiltInTip = true
+                                        } else if (onDeleted != null) {
+                                            itemToDelete = item
+                                            showDeleteConfirm = true
+                                        }
+                                        true
+                                    } else if ((keyEvent.key == Key.Enter || keyEvent.key == Key.DirectionCenter) && keyEvent.type == KeyEventType.KeyUp) {
+                                        // 确定键选中
+                                        onSelected(item)
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                },
                             selected = isSelected,
-                            onClick = { 
-                                // 短按选中
-                                if (!isLongPressing) {
-                                    onSelected(item)
-                                }
-                            },
+                            onClick = { onSelected(item) },
                             colors = ListItemDefaults.colors(
                                 containerColor = Color(0xFF1f1f1f),
                                 focusedContainerColor = PrimaryYellow,
@@ -367,13 +388,131 @@ fun <T> HistoryListDialog(
             },
         )
     }
+    
+    // 删除确认弹窗
+    if (showDeleteConfirm && itemToDelete != null) {
+        AlertDialog(
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false
+            ),
+            onDismissRequest = { 
+                showDeleteConfirm = false
+                itemToDelete = null
+            },
+            containerColor = Color(0xFF2a2a2a),
+            title = {
+                Text(
+                    text = "确认删除",
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            },
+            text = {
+                Text(
+                    text = "确定要删除这个历史记录吗？",
+                    color = Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                val focusRequester = remember { FocusRequester() }
+                var isFocused by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    focusRequester.requestFocus()
+                }
+                Button(
+                    onClick = {
+                        itemToDelete?.let { onDeleted?.invoke(it) }
+                        showDeleteConfirm = false
+                        itemToDelete = null
+                    },
+                    modifier = Modifier
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { isFocused = it.isFocused || it.hasFocus },
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF444444),
+                        contentColor = Color.White,
+                        focusedContainerColor = PrimaryYellow,
+                        focusedContentColor = Color.Black
+                    )
+                ) {
+                    Text("删除", color = if (isFocused) Color.Black else Color.White)
+                }
+            },
+            dismissButton = {
+                var isFocused by remember { mutableStateOf(false) }
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        itemToDelete = null
+                    },
+                    modifier = Modifier.onFocusChanged { isFocused = it.isFocused || it.hasFocus },
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF444444),
+                        contentColor = Color.White,
+                        focusedContainerColor = PrimaryYellow,
+                        focusedContentColor = Color.Black
+                    )
+                ) {
+                    Text("取消", color = if (isFocused) Color.Black else Color.White)
+                }
+            }
+        )
+    }
+    
+    // 内置源提示弹窗
+    if (showBuiltInTip) {
+        AlertDialog(
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false
+            ),
+            onDismissRequest = { showBuiltInTip = false },
+            containerColor = Color(0xFF2a2a2a),
+            title = {
+                Text(
+                    text = "提示",
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            },
+            text = {
+                Text(
+                    text = "内置源不可删除",
+                    color = Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                val focusRequester = remember { FocusRequester() }
+                var isFocused by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    focusRequester.requestFocus()
+                }
+                Button(
+                    onClick = { showBuiltInTip = false },
+                    modifier = Modifier
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { isFocused = it.isFocused || it.hasFocus },
+                    colors = ButtonDefaults.colors(
+                        containerColor = Color(0xFF444444),
+                        contentColor = Color.White,
+                        focusedContainerColor = PrimaryYellow,
+                        focusedContentColor = Color.Black
+                    )
+                ) {
+                    Text("知道了", color = if (isFocused) Color.Black else Color.White)
+                }
+            }
+        )
+    }
 }
 
 /**
  * 直播设置列表项卡片
  * 高亮时图标和文字都变为黑色
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun LiveSettingListCard(
     icon: ImageVector,
@@ -382,9 +521,18 @@ fun LiveSettingListCard(
     title: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    trailingContent: @Composable (() -> Unit)? = null
+    trailingContent: @Composable (() -> Unit)? = null,
+    isFirstItem: Boolean = false
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    
+    // 第一个项目自动获取焦点
+    LaunchedEffect(Unit) {
+        if (isFirstItem) {
+            focusRequester.requestFocus()
+        }
+    }
     
     Card(
         onClick = onClick,
@@ -399,6 +547,7 @@ fun LiveSettingListCard(
         ),
         modifier = modifier
             .fillMaxWidth()
+            .focusRequester(focusRequester)
             .onFocusChanged { focusState ->
                 isFocused = focusState.isFocused
             }

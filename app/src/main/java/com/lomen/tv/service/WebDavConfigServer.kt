@@ -14,6 +14,33 @@ class WebDavConfigServer(
 
     companion object {
         private const val TAG = "WebDavConfigServer"
+        
+        @Volatile
+        private var instance: WebDavConfigServer? = null
+        private var refCount = 0
+        
+        fun getInstance(context: Context, port: Int = 8893): WebDavConfigServer {
+            return instance ?: synchronized(this) {
+                instance ?: WebDavConfigServer(context.applicationContext, port).also {
+                    instance = it
+                }
+            }
+        }
+        
+        fun addRef() {
+            synchronized(this) {
+                refCount++
+                Log.d(TAG, "Server ref count increased to: $refCount")
+            }
+        }
+        
+        fun removeRef(): Boolean {
+            synchronized(this) {
+                refCount--
+                Log.d(TAG, "Server ref count decreased to: $refCount")
+                return refCount <= 0
+            }
+        }
     }
 
     private val _isRunning = MutableStateFlow(false)
@@ -40,6 +67,12 @@ class WebDavConfigServer(
 
     fun startServer(onConfig: (WebDavConfig) -> Unit) {
         onConfigReceived = onConfig
+        addRef()
+        // 如果服务器已经在运行，只更新回调，不重复启动
+        if (_isRunning.value) {
+            Log.d(TAG, "Server already running on port $listeningPort")
+            return
+        }
         try {
             start()
             _isRunning.value = true
@@ -50,10 +83,14 @@ class WebDavConfigServer(
     }
 
     fun stopServer() {
-        stop()
-        _isRunning.value = false
-        onConfigReceived = null
-        Log.d(TAG, "Server stopped")
+        // 只有当引用计数为0时才真正停止服务器
+        if (removeRef()) {
+            stop()
+            _isRunning.value = false
+            onConfigReceived = null
+            onLiveConfigReceived = null
+            Log.d(TAG, "Server stopped")
+        }
     }
 
     override fun serve(session: IHTTPSession): Response {
@@ -78,6 +115,12 @@ class WebDavConfigServer(
     ) {
         onConfigReceived = onWebDavConfig
         onLiveConfigReceived = onLiveConfig
+        addRef()
+        // 如果服务器已经在运行，只更新回调，不重复启动
+        if (_isRunning.value) {
+            Log.d(TAG, "Server already running on port $listeningPort")
+            return
+        }
         try {
             start()
             _isRunning.value = true
@@ -397,9 +440,16 @@ class WebDavConfigServer(
             session.inputStream.read(buffer, 0, contentLength)
             val body = String(buffer)
 
+            Log.d(TAG, "Received config POST: $body")
+
             // 解析JSON
             val config = parseConfigJson(body)
-            onConfigReceived?.invoke(config)
+            Log.d(TAG, "Parsed config: protocol=${config.protocol}, host=${config.host}, port=${config.port}")
+            
+            // 在主线程调用回调
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                onConfigReceived?.invoke(config)
+            }
 
             val response = """{"success": true, "message": "配置已保存"}"""
             newFixedLengthResponse(Response.Status.OK, "application/json", response)
@@ -699,9 +749,16 @@ class WebDavConfigServer(
             session.inputStream.read(buffer, 0, contentLength)
             val body = String(buffer)
 
+            Log.d(TAG, "Received live config POST: $body")
+
             // 解析JSON
             val config = parseLiveConfigJson(body)
-            onLiveConfigReceived?.invoke(config)
+            Log.d(TAG, "Parsed live config: name=${config.liveSourceName}, url=${config.liveSourceUrl}")
+
+            // 在主线程调用回调
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                onLiveConfigReceived?.invoke(config)
+            }
 
             val response = """{"success": true, "message": "直播配置已保存"}"""
             newFixedLengthResponse(Response.Status.OK, "application/json", response)

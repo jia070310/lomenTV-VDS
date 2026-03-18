@@ -25,10 +25,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
@@ -37,6 +39,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -48,12 +53,15 @@ import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
+import com.lomen.tv.data.preferences.LiveSettingsPreferences
+import com.lomen.tv.service.WebDavConfigServer
+import java.net.NetworkInterface
+import java.util.Collections
 import androidx.tv.material3.ListItem
 import androidx.tv.material3.ListItemDefaults
 import androidx.tv.material3.Surface
 import com.lomen.tv.data.model.live.CurrentProgramme
 import com.lomen.tv.data.model.live.LiveChannel
-import com.lomen.tv.data.preferences.LiveSettingsPreferences
 import com.lomen.tv.ui.live.utils.handleLiveKeyEvents
 import com.lomen.tv.ui.screens.settings.QrCodeDialog
 import com.lomen.tv.ui.theme.LomenTVTheme
@@ -210,13 +218,73 @@ fun LiveStatusBar(
         )
         
         // 二维码对话框 - 使用直播设置中的组件
+        val serverUrl = remember { 
+            val ip = getLocalIpAddress() ?: "192.168.1.100"
+            "http://$ip:8893/live"
+        }
+        
+        // 启动配置服务器
+        val webDavServer = remember { WebDavConfigServer.getInstance(context, 8893) }
+        val liveSettingsPreferences = remember { LiveSettingsPreferences(context) }
+        
+        DisposableEffect(showQrcodeDialog) {
+            if (showQrcodeDialog) {
+                webDavServer.startServerWithLiveConfig(
+                    onWebDavConfig = { /* 不处理 WebDAV 配置 */ },
+                    onLiveConfig = { config ->
+                        // 保存接收到的配置
+                        kotlinx.coroutines.runBlocking {
+                            if (config.liveSourceUrl.isNotBlank()) {
+                                liveSettingsPreferences.setLiveSourceUrl(config.liveSourceUrl)
+                                liveSettingsPreferences.addLiveSourceToHistory(
+                                    config.liveSourceName.takeIf { it.isNotBlank() } ?: "自定义源",
+                                    config.liveSourceUrl
+                                )
+                            }
+                            if (config.epgUrl.isNotBlank()) {
+                                liveSettingsPreferences.setEpgUrl(config.epgUrl)
+                                liveSettingsPreferences.addEpgUrlToHistory(config.epgUrl)
+                            }
+                            if (config.userAgent.isNotBlank()) {
+                                liveSettingsPreferences.setUserAgent(config.userAgent)
+                                liveSettingsPreferences.addUserAgentToHistory(config.userAgent)
+                            }
+                        }
+                    }
+                )
+            }
+            onDispose {
+                webDavServer.stopServer()
+            }
+        }
+        
         QrCodeDialog(
-            text = "http://192.168.0.3:8893/live",
+            text = serverUrl,
             title = "网页配置",
             description = "使用手机扫描二维码访问网页配置界面\n可批量添加直播源、节目单和UA",
             showDialogProvider = { showQrcodeDialog },
             onDismissRequest = { showQrcodeDialog = false }
         )
+    }
+}
+
+/**
+ * 获取本地IP地址
+ */
+private fun getLocalIpAddress(): String? {
+    return try {
+        val interfaces = NetworkInterface.getNetworkInterfaces()
+        for (networkInterface in Collections.list(interfaces)) {
+            val addresses = networkInterface.inetAddresses
+            for (address in Collections.list(addresses)) {
+                if (!address.isLoopbackAddress && address.hostAddress?.contains(":") == false) {
+                    return address.hostAddress
+                }
+            }
+        }
+        null
+    } catch (e: Exception) {
+        null
     }
 }
 
@@ -490,14 +558,26 @@ private fun LiveSourceDialog(
     onSourceSelected: (String) -> Unit = {},
     onShowQrcodeDialog: () -> Unit = {},
 ) {
-    if (showDialogProvider()) {
+    val showDialog = showDialogProvider()
+    if (showDialog) {
         val sourceList = sourceListProvider()
         val currentSourceUrl = currentSourceUrlProvider()
+        val listState = remember { androidx.tv.foundation.lazy.list.TvLazyListState() }
         
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(0.5f)),
+                .background(Color.Black.copy(0.5f))
+                // 捕获所有方向键事件，防止焦点跑出弹窗
+                .onPreviewKeyEvent { keyEvent ->
+                    when (keyEvent.key) {
+                        Key.DirectionLeft, Key.DirectionRight -> {
+                            // 左右键不处理，让父组件处理（关闭弹窗）
+                            false
+                        }
+                        else -> false
+                    }
+                },
             contentAlignment = Alignment.TopEnd,
         ) {
             Surface(
@@ -523,6 +603,7 @@ private fun LiveSourceDialog(
                     )
 
                     TvLazyColumn(
+                        state = listState,
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(vertical = 2.dp),
@@ -532,9 +613,9 @@ private fun LiveSourceDialog(
                             var isFocused by remember { mutableStateOf(false) }
                             val isCurrentSource = url == currentSourceUrl
 
-                            // 第一个项目自动获取焦点
+                            // 第一个项目或当前选中的源自动获取焦点
                             LaunchedEffect(Unit) {
-                                if (index == 0) {
+                                if (index == 0 || isCurrentSource) {
                                     focusRequester.requestFocus()
                                 }
                             }

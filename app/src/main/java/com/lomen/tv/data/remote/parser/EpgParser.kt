@@ -36,12 +36,20 @@ class EpgParser {
     /**
      * 从 URL 解析 EPG
      * 支持普通 XML 和 GZIP 压缩格式
+     * 如果是 aptv.app 域名，使用 APTV 专用 UA
      */
     fun parseFromUrl(url: String): Result<ChannelEpgList> {
         return try {
+            // 判断是否需要使用 APTV 专用 UA
+            val userAgent = if (url.contains("aptv.app", ignoreCase = true)) {
+                com.lomen.tv.data.preferences.LiveSettingsPreferences.Companion.APTV_SPECIAL_UA
+            } else {
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .header("User-Agent", userAgent)
                 .build()
 
             client.newCall(request).execute().use { response ->

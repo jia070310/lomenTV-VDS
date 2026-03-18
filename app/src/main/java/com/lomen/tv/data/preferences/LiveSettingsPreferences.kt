@@ -42,31 +42,34 @@ class LiveSettingsPreferences @Inject constructor(
         // 默认直播源
         const val DEFAULT_LIVE_SOURCE_URL = "https://gh-proxy.org/https://github.com/jia070310/lemonTV/blob/main/iptv-fe.m3u"
         // 主默认EPG地址
-        const val DEFAULT_EPG_URL = "http://epg.51zmt.top:8000/e1.xml.gz"
+        const val DEFAULT_EPG_URL = "https://gh-proxy.org/https://raw.githubusercontent.com/plsy1/epg/main/e/seven-days.xml.gz"
         // 备用EPG地址
-        const val BACKUP_EPG_URL = "https://epg.zsdc.eu.org/t.xml.gz"
+        const val BACKUP_EPG_URL = "http://epg.51zmt.top:8000/e1.xml.gz"
         const val DEFAULT_USER_AGENT = "AptvPlayer-UA"
         
         // 内置直播源列表
         val BUILT_IN_LIVE_SOURCES = listOf(
-            "lemonTV" to "https://gh-proxy.org/https://github.com/jia070310/lemonTV/blob/main/iptv-fe.m3u",
-            "migu" to "https://gh-proxy.org/github.com/ioptu/IPTV.txt2m3u.player/raw/refs/heads/main/migu.m3u",
-            "plutotv" to "https://gh-proxy.org/github.com/ioptu/IPTV.txt2m3u.player/raw/refs/heads/main/plutotv.m3u",
-            "rakutentv" to "https://gh-proxy.org/github.com/ioptu/IPTV.txt2m3u.player/raw/refs/heads/main/rakutentv.m3u",
-            "aptv" to "https://gh-proxy.org/https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u"
+            "LEMONTV" to "https://gh-proxy.org/https://github.com/jia070310/lemonTV/blob/main/iptv-fe.m3u",
+            "MIGU" to "https://gh-proxy.org/github.com/ioptu/IPTV.txt2m3u.player/raw/refs/heads/main/migu.m3u",
+            "APTV" to "https://gh-proxy.org/https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u"
         )
         
         // 内置UA列表
         val BUILT_IN_USER_AGENTS = listOf(
             "AptvPlayer-UA",
-            "aliplayer"
+            "aliplayer",
+            "APTV专用 (iPhone UA)"
         )
+        
+        // APTV 专用 UA（用于 aptv.app 域名的请求）
+        const val APTV_SPECIAL_UA = "AptvPlayer/1.4.25 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
         
         // 内置EPG节目表列表
         val BUILT_IN_EPG_URLS = listOf(
-            "http://epg.51zmt.top:8000/e.xml.gz",
-            "https://cdn.jsdelivr.net/gh/develop202/migu_video/playback.xml",
-            "https://ghfast.top/raw.githubusercontent.com/develop202/migu_video/refs/heads/main/playback.xml"
+            "https://gh-proxy.org/https://raw.githubusercontent.com/plsy1/epg/main/e/seven-days.xml.gz",
+            "http://epg.51zmt.top:8000/e1.xml.gz",
+            "https://ghfast.top/raw.githubusercontent.com/develop202/migu_video/refs/heads/main/playback.xml",
+            "https://hk.gh-proxy.org/raw.githubusercontent.com/develop202/migu_video/refs/heads/main/playback.xml"
         )
         
         // 画面比例枚举

@@ -101,6 +101,8 @@ fun LiveClassicPanelChannelList(
             .collect { _ -> onUserAction() }
     }
 
+    val currentChannel = initialChannelProvider()
+
     TvLazyColumn(
         state = listState,
         contentPadding = PaddingValues(8.dp),
@@ -111,7 +113,7 @@ fun LiveClassicPanelChannelList(
             .background(Color.Black.copy(0.8f)),
     ) {
         itemsIndexed(channelList, key = { _, channel -> channel.hashCode() }) { index, channel ->
-            val isSelected by remember { derivedStateOf { channel == focusedChannel } }
+            val isSelected by remember { derivedStateOf { channel == currentChannel } }
             val initialFocused by remember {
                 derivedStateOf { !hasFocused && channel == initialChannel }
             }
@@ -197,7 +199,7 @@ private fun LiveClassicPanelChannelItem(
                     ),
                 colors = ListItemDefaults.colors(
                     focusedContainerColor = PrimaryYellow,
-                    selectedContainerColor = Color.Transparent,
+                    selectedContainerColor = PrimaryYellow.copy(alpha = 0.3f),
                     containerColor = Color.Transparent,
                 ),
                 selected = isSelectedProvider(),
