@@ -356,30 +356,31 @@ class LiveViewModel @Inject constructor(
     }
 
     /**
-     * 处理播放错误
-     * 使用新的错误处理器实现四阶段智能重试：
-     * 1. 重试当前URL（最多3次，间隔3秒）
-     * 2. 切换到同频道的下一个URL
-     * 3. 切换到下一个频道
-     * 4. 连续失败超过阈值，触发直播源切换
+     * 处理播放错误（LiveScreen重试3次失败后调用）
+     * 实现线路切换和频道切换逻辑：
+     * 1. 切换到同频道的下一个URL
+     * 2. 所有URL都失败后切换到下一个频道
+     * 3. 连续失败超过阈值，触发直播源切换
      */
-    fun handlePlayError(errorMessage: String? = null) {
+    fun handlePlayError() {
         val currentChannel = _currentChannel.value
         val currentUrlIdx = _currentChannelUrlIdx.value
+        val hasMultipleRoutes = currentChannel.urlList.size > 1
         
-        android.util.Log.w("LiveViewModel", "播放错误，使用新的错误处理器: ${currentChannel.name}, URL索引: $currentUrlIdx")
+        android.util.Log.w("LiveViewModel", "LiveScreen重试失败，处理后续逻辑: ${currentChannel.name}, URL索引: $currentUrlIdx")
         
-        // 使用新的错误处理器
-        errorHandler?.handleError(currentChannel, currentUrlIdx)
-    }
-    
-    /**
-     * 播放成功回调
-     * 重置错误处理器的计数器
-     */
-    fun onPlaybackSuccess() {
-        errorHandler?.onPlaybackSuccess()
-        _playErrorCount.value = 0
+        if (hasMultipleRoutes && currentUrlIdx < currentChannel.urlList.size - 1) {
+            // 切换到同频道的下一个URL
+            val nextUrlIdx = currentUrlIdx + 1
+            android.util.Log.d("LiveViewModel", "切换到下一个URL: $currentUrlIdx -> $nextUrlIdx")
+            _errorToastMessage.value = "线路${currentUrlIdx + 1}失败，切换到线路${nextUrlIdx + 1}..."
+            _currentChannelUrlIdx.value = nextUrlIdx
+        } else {
+            // 所有URL都失败，切换到下一个频道
+            android.util.Log.d("LiveViewModel", "所有URL失败，切换到下一个频道")
+            _errorToastMessage.value = "播放错误，自动切换下一个频道"
+            changeToNextChannel()
+        }
     }
 
     /**

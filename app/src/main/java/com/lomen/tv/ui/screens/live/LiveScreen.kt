@@ -73,7 +73,10 @@ import com.lomen.tv.ui.live.utils.handleLiveDragGestures
 import com.lomen.tv.ui.live.utils.handleLiveKeyEvents
 import com.lomen.tv.ui.theme.LomenTVTheme
 import com.lomen.tv.data.model.live.ChannelEpgList
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun LiveScreen(
@@ -112,9 +115,6 @@ fun LiveScreen(
     val errorToastMessage by viewModel.errorToastMessage.collectAsState()
     val showErrorDialog by viewModel.showErrorDialog.collectAsState()
     val errorDialogMessage by viewModel.errorDialogMessage.collectAsState()
-    
-    // 重试状态（来自新的错误处理器）
-    val retryStatus by viewModel.retryStatus.collectAsState()
     
     val configuration = LocalConfiguration.current
 
@@ -181,11 +181,20 @@ fun LiveScreen(
     var bufferingStartTime by remember { mutableLongStateOf(0L) }
     val bufferingTimeoutMs = 10_000L  // 10秒超时（缩短以便快速测试）
     
+    // 重试状态（参考 mytv-android-main 的实现）
+    var retryCount by remember { mutableIntStateOf(0) }
+    var retryStatus by remember { mutableStateOf<String?>(null) }
+    val maxRetryCount = 3
+    val retryIntervalMs = 3000L
+    
     // 当切换频道时，重置重试状态和缓冲超时
     LaunchedEffect(currentChannel, currentChannelUrlIdx) {
         contentTypeAttempts = emptySet()
         bufferingStartTime = 0L  // 重置缓冲超时计时器
         currentContentType = Util.inferContentType(Uri.parse(currentChannel.urlList.getOrNull(currentChannelUrlIdx) ?: ""))
+        // 重置重试计数
+        retryCount = 0
+        retryStatus = null
         android.util.Log.d("LiveScreen", "切换频道，重置内容类型为: $currentContentType")
     }
 
@@ -221,8 +230,9 @@ fun LiveScreen(
                         exoPlayer.audioFormat?.let { format ->
                             android.util.Log.d("LiveScreen", "音频格式: ${format.sampleMimeType}, 编码: ${format.codecs}, 声道: ${format.channelCount}, 采样率: ${format.sampleRate}")
                         }
-                        // 通知 ViewModel 播放成功，重置错误处理器
-                        viewModel.onPlaybackSuccess()
+                        // 播放成功，重置重试计数和状态
+                        retryCount = 0
+                        retryStatus = null
                     }
                     Player.STATE_BUFFERING -> {
                         // 开始缓冲时记录时间
@@ -256,20 +266,6 @@ fun LiveScreen(
                 android.util.Log.e("LiveScreen", "======================")
                 bufferingStartTime = 0L  // 重置缓冲时间
                 
-                // 构建用户友好的错误信息
-                val errorMessage = when (error.errorCode) {
-                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败，设备可能不支持此视频格式"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED -> "解码器查询失败"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED -> "视频解码失败，设备可能不支持此视频编码"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> "网络错误"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "网络连接失败"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接超时"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "视频文件格式错误"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "不支持的视频容器格式"
-                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "播放列表格式错误"
-                    else -> error.message ?: "播放错误(代码:${error.errorCode})"
-                }
-                
                 // 当解析容器不支持时，尝试其他内容类型
                 if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED) {
                     android.util.Log.d("LiveScreen", "尝试其他内容类型，当前已尝试: $contentTypeAttempts")
@@ -286,14 +282,85 @@ fun LiveScreen(
                             android.util.Log.d("LiveScreen", "切换到 OTHER 内容类型重试")
                         }
                         else -> {
-                            android.util.Log.e("LiveScreen", "所有内容类型都尝试过，播放失败，切换到下一个频道")
-                            viewModel.handlePlayError(errorMessage)
+                            android.util.Log.e("LiveScreen", "所有内容类型都尝试过，播放失败，通知ViewModel处理")
+                            viewModel.handlePlayError()
                         }
                     }
                 } else {
-                    // 其他播放错误，直接通知 ViewModel 处理
-                    android.util.Log.e("LiveScreen", "播放错误: $errorMessage，通知 ViewModel 处理")
-                    viewModel.handlePlayError(errorMessage)
+                    // 其他播放错误，使用新的重试机制
+                    android.util.Log.e("LiveScreen", "播放错误，触发重试机制")
+                    // 触发重试逻辑
+                    if (retryCount < maxRetryCount) {
+                        retryCount++
+                        val countdown = (retryIntervalMs / 1000).toInt()
+                        android.util.Log.w("LiveScreen", "播放失败，${countdown}秒后重试（$retryCount/$maxRetryCount）：${currentChannel.name}")
+                        
+                        // 保存当前重试的上下文
+                        val retryChannel = currentChannel
+                        val retryUrlIdx = currentChannelUrlIdx
+                        val retryContentType = currentContentType
+                        
+                        // 启动倒计时重试
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                            for (remaining in countdown downTo 1) {
+                                retryStatus = "正在重试 $retryCount/$maxRetryCount，${remaining}秒后重连..."
+                                delay(1000L)
+                            }
+                            // 倒计时结束，执行重试
+                            retryStatus = "正在重试 $retryCount/$maxRetryCount..."
+                            
+                            // 确保仍在播放同一频道同一URL时才重试
+                            if (currentChannel == retryChannel && currentChannelUrlIdx == retryUrlIdx) {
+                                android.util.Log.d("LiveScreen", "执行重试: ${retryChannel.name}, URL索引: $retryUrlIdx")
+                                // 直接重新准备播放器（参考mytv-android-main的方式）
+                                try {
+                                    exoPlayer.stop()
+                                    exoPlayer.clearMediaItems()
+                                    
+                                    val url = retryChannel.urlList[retryUrlIdx]
+                                    val mediaItem = MediaItem.fromUri(url)
+                                    
+                                    val httpDataSourceFactory = DefaultHttpDataSource.Factory().apply {
+                                        if (!retryChannel.userAgent.isNullOrBlank()) {
+                                            setUserAgent(retryChannel.userAgent)
+                                        }
+                                        if (!retryChannel.referer.isNullOrBlank()) {
+                                            setDefaultRequestProperties(mapOf("Referer" to retryChannel.referer))
+                                        }
+                                        setAllowCrossProtocolRedirects(true)
+                                        setConnectTimeoutMs(15000)
+                                        setReadTimeoutMs(15000)
+                                    }
+                                    
+                                    val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
+                                    
+                                    val mediaSource = when (retryContentType) {
+                                        C.CONTENT_TYPE_HLS -> {
+                                            HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+                                        }
+                                        else -> {
+                                            ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+                                        }
+                                    }
+                                    
+                                    exoPlayer.setMediaSource(mediaSource)
+                                    exoPlayer.prepare()
+                                    exoPlayer.play()
+                                } catch (e: Exception) {
+                                    android.util.Log.e("LiveScreen", "重试播放失败: ${e.message}", e)
+                                    retryStatus = null
+                                    // 重试失败，通知ViewModel处理后续逻辑
+                                    viewModel.handlePlayError()
+                                }
+                            }
+                        }
+                    } else {
+                        // 重试次数耗尽，通知ViewModel处理
+                        android.util.Log.w("LiveScreen", "重试${maxRetryCount}次均失败，通知ViewModel处理")
+                        retryCount = 0
+                        retryStatus = null
+                        viewModel.handlePlayError()
+                    }
                 }
             }
         }
@@ -324,7 +391,7 @@ fun LiveScreen(
                     android.util.Log.w("LiveScreen", "播放器状态: ${exoPlayer.playbackState}")
                     android.util.Log.w("LiveScreen", "====================")
                     bufferingStartTime = 0L  // 重置，避免重复触发
-                    viewModel.handlePlayError("视频加载超时(${bufferingTimeoutMs/1000}秒)，设备可能不支持此视频格式")
+                    viewModel.handlePlayError()
                 }
             }
             
@@ -347,7 +414,7 @@ fun LiveScreen(
                     android.util.Log.e("LiveScreen", "音频: ${exoPlayer.audioFormat?.codecs}, 视频: ${exoPlayer.videoFormat?.codecs}")
                     android.util.Log.e("LiveScreen", "================================")
                     noVideoCount = 0
-                    viewModel.handlePlayError("视频解码失败（有声音但黑屏），设备不支持此视频编码格式")
+                    viewModel.handlePlayError()
                 }
             } else {
                 noVideoCount = 0  // 正常播放，重置计数器
