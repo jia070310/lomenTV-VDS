@@ -16,14 +16,18 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Settings
@@ -56,6 +60,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -68,6 +73,8 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
+import androidx.tv.material3.IconButton
+import androidx.tv.material3.IconButtonDefaults
 import androidx.tv.material3.ListItem
 import androidx.tv.material3.ListItemDefaults
 import androidx.tv.material3.Switch
@@ -78,6 +85,7 @@ import com.lomen.tv.ui.theme.PrimaryYellow
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
+import com.lomen.tv.ui.theme.TextSecondary
 import io.github.alexzhirkevich.qrose.options.QrBallShape
 import io.github.alexzhirkevich.qrose.options.QrFrameShape
 import io.github.alexzhirkevich.qrose.options.QrPixelShape
@@ -121,8 +129,9 @@ fun QrCodeImage(
 }
 
 /**
- * 二维码弹窗 - 参考 mytv-android-main 设计
+ * 二维码弹窗 - 统一风格设计，与 TMDB API 设置和 WebDAV 配置保持一致
  */
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun QrCodeDialog(
     modifier: Modifier = Modifier,
@@ -133,62 +142,146 @@ fun QrCodeDialog(
     onDismissRequest: () -> Unit = {},
 ) {
     if (showDialogProvider()) {
-        AlertDialog(
-            modifier = modifier.width(420.dp),
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+        // 关闭按钮焦点请求器
+        val closeFocusRequester = remember { FocusRequester() }
+
+        // 自动聚焦到关闭按钮
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(100)
+            closeFocusRequester.requestFocus()
+        }
+
+        androidx.compose.ui.window.Dialog(
             onDismissRequest = onDismissRequest,
-            containerColor = Color(0xFF2a2a2a),
-            title = {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            },
-            text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth()
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            // 使用 Box 包裹，通过 fillMaxSize 和 contentAlignment 实现居中
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    onClick = {},
+                    colors = CardDefaults.colors(
+                        containerColor = SurfaceDark,
+                        focusedContainerColor = SurfaceDark
+                    ),
+                    modifier = modifier
+                        .width(320.dp)  // 缩小宽度
+                        .height(365.dp)  // 缩小高度
+                        .onPreviewKeyEvent { keyEvent ->
+                            // 拦截所有方向键，防止光标移出窗口
+                            if (keyEvent.key == Key.DirectionUp ||
+                                keyEvent.key == Key.DirectionDown ||
+                                keyEvent.key == Key.DirectionLeft ||
+                                keyEvent.key == Key.DirectionRight
+                            ) {
+                                true
+                            } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                                // 按返回键关闭窗口
+                                onDismissRequest()
+                                true
+                            } else {
+                                false
+                            }
+                        }
                 ) {
-                    description?.let {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // 标题栏 - 右上角关闭按钮
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = TextPrimary
+                            )
+                            // 右上角关闭按钮 - 黄色底黑色图标
+                            IconButton(
+                                onClick = onDismissRequest,
+                                colors = IconButtonDefaults.colors(
+                                    containerColor = Color.Transparent,
+                                    contentColor = TextMuted,
+                                    focusedContainerColor = PrimaryYellow,
+                                    focusedContentColor = Color.Black
+                                ),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .focusRequester(closeFocusRequester)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "关闭",
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 说明文字
+                        description?.let {
+                            Text(
+                                text = it,
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // 二维码 - 使用百分比尺寸以适应不同分辨率，缩小高度
+                        QrCodeImage(
+                            text = text,
+                            modifier = Modifier
+                                .fillMaxWidth(0.55f)
+                                .heightIn(max = 160.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 服务器地址
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "访问地址:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = text,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = PrimaryYellow,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 提示信息
                         Text(
-                            text = it,
-                            color = Color.White.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(bottom = 20.dp)
+                            text = "提示: 使用手机扫描二维码进行网页配置",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                            textAlign = TextAlign.Center
                         )
                     }
-                    QrCodeImage(
-                        text = text,
-                        modifier = Modifier
-                            .width(240.dp)
-                            .height(240.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = text,
-                        color = PrimaryYellow,
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-            },
-            confirmButton = {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "关闭",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
                 }
             }
-        )
+        }
     }
 }
 

@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -692,7 +694,7 @@ private fun WebDavQrCodeConfig(
         }
     }
 
-    // 删除遮罩层，只保留Card，居中显示，宽高比4:5
+    // 使用 Box 包裹，通过 fillMaxSize 和 contentAlignment 实现居中
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -704,12 +706,11 @@ private fun WebDavQrCodeConfig(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .fillMaxWidth(0.25f)
-                .aspectRatio(4f / 5f)
-                .padding(12.dp)
+                .width(320.dp)  // 缩小宽度
+                .height(365.dp),  // 缩小高度
         ) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // 标题栏
@@ -720,16 +721,17 @@ private fun WebDavQrCodeConfig(
             ) {
                 Text(
                     text = "添加WebDAV网盘",
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.headlineSmall,
                     color = TextPrimary
                 )
+                // 右上角关闭按钮 - 黄色底黑色图标
                 IconButton(
                     onClick = onDismiss,
                     colors = androidx.tv.material3.IconButtonDefaults.colors(
                         containerColor = Color.Transparent,
                         contentColor = TextMuted,
                         focusedContainerColor = PrimaryYellow,
-                        focusedContentColor = BackgroundDark
+                        focusedContentColor = Color.Black
                     ),
                     modifier = Modifier
                         .size(40.dp)
@@ -752,7 +754,8 @@ private fun WebDavQrCodeConfig(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "关闭"
+                        contentDescription = "关闭",
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
@@ -819,13 +822,14 @@ private fun QrCodeView(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 二维码
+        // 二维码 - 使用百分比尺寸，缩小高度
         Box(
             modifier = Modifier
-                .size(200.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .fillMaxWidth(0.6f)
+                .heightIn(max = 180.dp)
+                .clip(RoundedCornerShape(12.dp))
                 .background(androidx.compose.ui.graphics.Color.White)
-                .padding(16.dp),
+                .padding(10.dp),
             contentAlignment = Alignment.Center
         ) {
             qrCodeBitmap?.let { bitmap ->
@@ -837,28 +841,28 @@ private fun QrCodeView(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // 扫码提示
         Text(
             text = "扫码前往设置页面",
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodySmall,
             color = PrimaryYellow,
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         // 浏览器访问地址
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = "浏览器访问地址：",
                 style = MaterialTheme.typography.bodySmall,
                 color = TextMuted
             )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = serverUrl,
                 style = MaterialTheme.typography.bodySmall,

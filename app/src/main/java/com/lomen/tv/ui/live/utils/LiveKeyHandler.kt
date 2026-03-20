@@ -21,22 +21,45 @@ fun Modifier.handleLiveKeyEvents(
     onKeyLongTap: Map<Int, () -> Unit> = emptyMap(),
 ): Modifier {
     val keyDownMap = mutableMapOf<Int, Boolean>()
+    // 用于去重的时间戳记录
+    val lastEventTime = mutableMapOf<Int, Long>()
+    val debounceMs = 50L  // 50毫秒内的重复事件将被忽略
 
     return onPreviewKeyEvent {
-        when (it.nativeKeyEvent.action) {
+        val keyCode = it.nativeKeyEvent.keyCode
+        val action = it.nativeKeyEvent.action
+        val eventTime = System.currentTimeMillis()
+        
+        // 去重检查：如果同一按键在很短的时间内收到相同的事件，则忽略
+        val lastTime = lastEventTime[keyCode] ?: 0L
+        val timeDiff = eventTime - lastTime
+        if (timeDiff < debounceMs && lastTime > 0) {
+            android.util.Log.d("LiveKeyHandler", "忽略重复按键事件: keyCode=$keyCode, 时间差=${timeDiff}ms")
+            return@onPreviewKeyEvent false
+        }
+        lastEventTime[keyCode] = eventTime
+        
+        android.util.Log.d("LiveKeyHandler", "收到按键事件: keyCode=$keyCode, action=$action, repeatCount=${it.nativeKeyEvent.repeatCount}")
+        
+        when (action) {
             KeyEvent.ACTION_DOWN -> {
                 if (it.nativeKeyEvent.repeatCount == 0) {
-                    keyDownMap[it.nativeKeyEvent.keyCode] = true
+                    keyDownMap[keyCode] = true
+                    android.util.Log.d("LiveKeyHandler", "按键按下: $keyCode")
                 } else if (it.nativeKeyEvent.repeatCount == 1) {
-                    keyDownMap.remove(it.nativeKeyEvent.keyCode)
-                    onKeyLongTap[it.nativeKeyEvent.keyCode]?.invoke()
+                    keyDownMap.remove(keyCode)
+                    android.util.Log.d("LiveKeyHandler", "长按触发: $keyCode")
+                    onKeyLongTap[keyCode]?.invoke()
                 }
             }
 
             KeyEvent.ACTION_UP -> {
-                if (keyDownMap[it.nativeKeyEvent.keyCode] == true) {
-                    keyDownMap.remove(it.nativeKeyEvent.keyCode)
-                    onKeyTap[it.nativeKeyEvent.keyCode]?.invoke()
+                if (keyDownMap[keyCode] == true) {
+                    keyDownMap.remove(keyCode)
+                    android.util.Log.d("LiveKeyHandler", "按键抬起，执行回调: $keyCode")
+                    onKeyTap[keyCode]?.invoke()
+                } else {
+                    android.util.Log.d("LiveKeyHandler", "按键抬起，但未找到对应的按下记录: $keyCode")
                 }
             }
         }
@@ -116,7 +139,7 @@ fun Modifier.handleLiveKeyEvents(
     detectTapGestures(
         onTap = { onSelect() },
         onLongPress = { onLongSelect() },
-        onDoubleTap = { onSettings() },
+        onDoubleTap = { onSettings() },  // 双击呼出状态栏（模拟器鼠标双击）
     )
 }
 

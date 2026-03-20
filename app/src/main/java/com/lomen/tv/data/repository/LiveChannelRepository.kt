@@ -48,20 +48,24 @@ class LiveChannelRepository @Inject constructor() {
         _errorMessage.value = null
 
         try {
+            Log.d("LiveChannelRepository", "开始加载直播源: $url")
             val result = sourceParser.parseFromUrl(url)
             result.fold(
                 onSuccess = { groupList ->
+                    Log.d("LiveChannelRepository", "直播源加载成功，分组数: ${groupList.size}")
                     _channelGroupList.value = groupList
                     _isLoading.value = false
                     Result.success(Unit)
                 },
                 onFailure = { error ->
+                    Log.e("LiveChannelRepository", "直播源加载失败: ${error.message}", error)
                     _errorMessage.value = "解析源错误，请切换直播源"
                     _isLoading.value = false
                     Result.failure(error)
                 }
             )
         } catch (e: Exception) {
+            Log.e("LiveChannelRepository", "直播源加载异常: ${e.message}", e)
             _errorMessage.value = e.message
             _isLoading.value = false
             Result.failure(e)
@@ -135,7 +139,13 @@ class LiveChannelRepository @Inject constructor() {
      */
     fun getNextChannel(currentChannel: LiveChannel): LiveChannel? {
         val channels = _channelGroupList.value.allChannels()
-        val currentIndex = channels.indexOfFirst { it.channelName == currentChannel.channelName }
+        // 使用 uniqueId 查找，如果 uniqueId 为空则使用对象引用比较
+        val currentIndex = if (currentChannel.uniqueId.isNotEmpty()) {
+            channels.indexOfFirst { it.uniqueId == currentChannel.uniqueId }
+        } else {
+            channels.indexOfFirst { it === currentChannel }
+        }
+        Log.d(TAG, "getNextChannel: 当前频道=${currentChannel.name}, uniqueId=${currentChannel.uniqueId}, 索引=$currentIndex, 总数=${channels.size}")
         return if (currentIndex >= 0 && currentIndex < channels.size - 1) {
             channels[currentIndex + 1]
         } else if (channels.isNotEmpty()) {
@@ -150,7 +160,13 @@ class LiveChannelRepository @Inject constructor() {
      */
     fun getPreviousChannel(currentChannel: LiveChannel): LiveChannel? {
         val channels = _channelGroupList.value.allChannels()
-        val currentIndex = channels.indexOfFirst { it.channelName == currentChannel.channelName }
+        // 使用 uniqueId 查找，如果 uniqueId 为空则使用对象引用比较
+        val currentIndex = if (currentChannel.uniqueId.isNotEmpty()) {
+            channels.indexOfFirst { it.uniqueId == currentChannel.uniqueId }
+        } else {
+            channels.indexOfFirst { it === currentChannel }
+        }
+        Log.d(TAG, "getPreviousChannel: 当前频道=${currentChannel.name}, uniqueId=${currentChannel.uniqueId}, 索引=$currentIndex, 总数=${channels.size}")
         return if (currentIndex > 0) {
             channels[currentIndex - 1]
         } else if (channels.isNotEmpty()) {

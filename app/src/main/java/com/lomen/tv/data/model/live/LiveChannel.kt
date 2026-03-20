@@ -36,7 +36,18 @@ data class LiveChannel(
      * EPG 节目单 URL 列表（从 x-tvg-url 解析）
      */
     val epgUrls: List<String> = emptyList(),
+    
+    /**
+     * 唯一标识符，用于区分同名频道
+     * 格式：频道名_索引
+     */
+    val uniqueId: String = "",
 ) {
+    /**
+     * 是否有多线路
+     */
+    fun hasMultipleRoutes(): Boolean = urlList.size > 1
+    
     companion object {
         val EXAMPLE = LiveChannel(
             name = "CCTV-1",

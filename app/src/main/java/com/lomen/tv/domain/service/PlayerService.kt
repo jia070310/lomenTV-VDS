@@ -18,6 +18,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,7 @@ class PlayerService @Inject constructor(
 ) {
     private var exoPlayer: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
+    private var bandwidthMeter: DefaultBandwidthMeter? = null
 
     private val _playerState = MutableStateFlow(PlayerState())
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
@@ -106,6 +108,12 @@ class PlayerService @Inject constructor(
                 )
                 .build()
 
+            // 创建 BandwidthMeter 用于测量网速
+            bandwidthMeter = DefaultBandwidthMeter.Builder(context)
+                .setInitialBitrateEstimate(2_000_000) // 初始估计 2Mbps
+                .setSlidingWindowMaxWeight(2000) // 2秒滑动窗口
+                .build()
+            
             // 配置HttpDataSource以支持自定义请求头
             val httpDataSourceFactory = DefaultHttpDataSource.Factory()
                 .setConnectTimeoutMs(30_000)
@@ -137,6 +145,7 @@ class PlayerService @Inject constructor(
                 .setMediaSourceFactory(mediaSourceFactory)
                 .setTrackSelector(trackSelector!!)
                 .setLoadControl(loadControl)
+                .setBandwidthMeter(bandwidthMeter!!)
                 .setAudioAttributes(audioAttributes, true)
                 .setHandleAudioBecomingNoisy(true)
                 .build()
@@ -154,11 +163,19 @@ class PlayerService @Inject constructor(
         }
         exoPlayer = null
         trackSelector = null
+        bandwidthMeter = null
     }
 
     fun getPlayer(): ExoPlayer? {
         android.util.Log.d("PlayerService", "getPlayer called, exoPlayer=$exoPlayer")
         return exoPlayer
+    }
+    
+    /**
+     * 获取当前网速（比特率），单位：bps
+     */
+    fun getCurrentBitrate(): Long {
+        return bandwidthMeter?.bitrateEstimate ?: 0L
     }
 
     /**

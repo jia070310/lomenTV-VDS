@@ -1,9 +1,11 @@
 package com.lomen.tv.data.remote.parser
 
+import android.util.Log
 import com.lomen.tv.data.model.live.ChannelEpg
 import com.lomen.tv.data.model.live.ChannelEpgList
 import com.lomen.tv.data.model.live.EpgProgramme
 import com.lomen.tv.data.model.live.EpgProgrammeList
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.xmlpull.v1.XmlPullParser
@@ -12,6 +14,7 @@ import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.InputStreamReader
 import java.io.StringReader
+import java.net.InetAddress
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -23,7 +26,31 @@ import java.util.zip.GZIPInputStream
  */
 class EpgParser {
 
+    companion object {
+        private const val TAG = "EpgParser"
+        
+        // gh.aptv.app 的正确 IP 地址（通过 8.8.8.8 DNS 解析）
+        private val APTV_APP_IP = listOf(
+            InetAddress.getByName("104.21.82.229"),
+            InetAddress.getByName("172.67.184.198")
+        )
+    }
+    
+    // 自定义 DNS 解析器
+    private val customDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            return when {
+                hostname.contains("aptv.app", ignoreCase = true) -> {
+                    Log.d(TAG, "使用自定义 DNS 解析: $hostname -> $APTV_APP_IP")
+                    APTV_APP_IP
+                }
+                else -> Dns.SYSTEM.lookup(hostname)
+            }
+        }
+    }
+
     private val client = OkHttpClient.Builder()
+        .dns(customDns)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
@@ -41,9 +68,12 @@ class EpgParser {
     fun parseFromUrl(url: String): Result<ChannelEpgList> {
         return try {
             // 判断是否需要使用 APTV 专用 UA
-            val userAgent = if (url.contains("aptv.app", ignoreCase = true)) {
+            val isAptvDomain = url.contains("aptv.app", ignoreCase = true)
+            val userAgent = if (isAptvDomain) {
+                android.util.Log.d("EpgParser", "使用 APTV 专用 UA 请求: $url")
                 com.lomen.tv.data.preferences.LiveSettingsPreferences.Companion.APTV_SPECIAL_UA
             } else {
+                android.util.Log.d("EpgParser", "使用默认 UA 请求: $url")
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
             

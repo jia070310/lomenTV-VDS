@@ -48,9 +48,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.lomen.tv.data.preferences.LiveSettingsPreferences
 import com.lomen.tv.ui.live.components.LiveChannelGroupList
 import com.lomen.tv.ui.live.components.LiveChannelInfo
@@ -107,11 +110,44 @@ fun LiveScreen(
     
     val configuration = LocalConfiguration.current
 
-    // ExoPlayer
+    // ExoPlayer - 配置支持4K和解码器回退
     val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            playWhenReady = true
+        // 创建渲染器工厂，启用软件解码器作为回退
+        val renderersFactory = DefaultRenderersFactory(context).apply {
+            // 设置扩展渲染器模式为优先使用
+            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            // 启用解码器回退：当硬件解码器不支持时，自动回退到软件解码器
+            setEnableDecoderFallback(true)
+            // 允许视频轨道切换时的缓冲时间
+            setAllowedVideoJoiningTimeMs(5000)
         }
+        
+        // 创建 TrackSelector 支持 4K 视频
+        val trackSelector = DefaultTrackSelector(context)
+        val trackParams = DefaultTrackSelector.Parameters.Builder(context)
+            .setMaxVideoSize(3840, 2160)  // 支持4K
+            .setMaxVideoBitrate(100_000_000)  // 100Mbps，支持高码率4K
+            .setForceHighestSupportedBitrate(false)  // 允许回退到较低质量
+            .setTunnelingEnabled(false)  // 禁用隧道模式，确保可以使用软件解码器
+            .build()
+        trackSelector.parameters = trackParams
+        
+        // 配置缓冲控制
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                10_000,  // minBufferMs - 最小缓冲10秒
+                30_000,  // maxBufferMs - 最大缓冲30秒
+                1_000,   // bufferForPlaybackMs - 开始播放需要1秒
+                2_000    // bufferForPlaybackAfterRebufferMs - 重新缓冲需要2秒
+            )
+            .build()
+        
+        ExoPlayer.Builder(context, renderersFactory)
+            .setTrackSelector(trackSelector)
+            .setLoadControl(loadControl)
+            .build().apply {
+                playWhenReady = true
+            }
     }
 
     // 计算画面比例
@@ -128,17 +164,19 @@ fun LiveScreen(
     // 视频元数据
     var videoWidth by remember { mutableIntStateOf(0) }
     var videoHeight by remember { mutableIntStateOf(0) }
-    var networkSpeed by remember { mutableLongStateOf(0L) }
-    var lastBytesTransferred by remember { mutableLongStateOf(0L) }
-    var lastSpeedUpdateTime by remember { mutableLongStateOf(0L) }
     
     // 内容类型重试记录
     var contentTypeAttempts by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var currentContentType by remember { mutableIntStateOf(C.CONTENT_TYPE_OTHER) }
     
-    // 当切换频道时，重置重试状态
+    // 缓冲超时检测
+    var bufferingStartTime by remember { mutableLongStateOf(0L) }
+    val bufferingTimeoutMs = 10_000L  // 10秒超时（缩短以便快速测试）
+    
+    // 当切换频道时，重置重试状态和缓冲超时
     LaunchedEffect(currentChannel, currentChannelUrlIdx) {
         contentTypeAttempts = emptySet()
+        bufferingStartTime = 0L  // 重置缓冲超时计时器
         currentContentType = Util.inferContentType(Uri.parse(currentChannel.urlList.getOrNull(currentChannelUrlIdx) ?: ""))
         android.util.Log.d("LiveScreen", "切换频道，重置内容类型为: $currentContentType")
     }
@@ -149,21 +187,78 @@ fun LiveScreen(
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 videoWidth = videoSize.width
                 videoHeight = videoSize.height
+                android.util.Log.d("LiveScreen", "视频尺寸: ${videoSize.width}x${videoSize.height}")
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                android.util.Log.d("LiveScreen", "播放状态变化: $playbackState")
-                if (playbackState == Player.STATE_READY) {
-                    // 播放就绪时更新分辨率
-                    exoPlayer.videoFormat?.let { format ->
-                        videoWidth = format.width
-                        videoHeight = format.height
+                val stateName = when (playbackState) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "UNKNOWN"
+                }
+                android.util.Log.d("LiveScreen", "播放状态变化: $stateName ($playbackState), 当前频道: ${currentChannel.name}")
+                
+                when (playbackState) {
+                    Player.STATE_READY -> {
+                        // 播放就绪时更新分辨率，重置缓冲超时
+                        bufferingStartTime = 0L
+                        exoPlayer.videoFormat?.let { format ->
+                            videoWidth = format.width
+                            videoHeight = format.height
+                            android.util.Log.d("LiveScreen", "视频格式: ${format.sampleMimeType}, 编码: ${format.codecs}, 分辨率: ${format.width}x${format.height}, 码率: ${format.bitrate}")
+                        }
+                        // 检查音频格式
+                        exoPlayer.audioFormat?.let { format ->
+                            android.util.Log.d("LiveScreen", "音频格式: ${format.sampleMimeType}, 编码: ${format.codecs}, 声道: ${format.channelCount}, 采样率: ${format.sampleRate}")
+                        }
+                    }
+                    Player.STATE_BUFFERING -> {
+                        // 开始缓冲时记录时间
+                        if (bufferingStartTime == 0L) {
+                            bufferingStartTime = System.currentTimeMillis()
+                            android.util.Log.d("LiveScreen", "开始缓冲... 频道: ${currentChannel.name}")
+                        }
+                    }
+                    Player.STATE_IDLE -> {
+                        // 空闲状态，重置缓冲时间
+                        android.util.Log.d("LiveScreen", "播放器进入IDLE状态")
+                        bufferingStartTime = 0L
+                    }
+                    Player.STATE_ENDED -> {
+                        android.util.Log.d("LiveScreen", "播放结束")
+                        bufferingStartTime = 0L
                     }
                 }
             }
+            
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                android.util.Log.d("LiveScreen", "播放状态: isPlaying=$isPlaying, 频道: ${currentChannel.name}")
+            }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                android.util.Log.e("LiveScreen", "播放器错误: ${error.errorCodeName}, ${error.message}")
+                android.util.Log.e("LiveScreen", "===== 播放器错误 =====")
+                android.util.Log.e("LiveScreen", "错误码: ${error.errorCode} (${error.errorCodeName})")
+                android.util.Log.e("LiveScreen", "错误信息: ${error.message}")
+                android.util.Log.e("LiveScreen", "错误原因: ${error.cause?.message}")
+                android.util.Log.e("LiveScreen", "当前频道: ${currentChannel.name}, URL: ${currentChannel.urlList.getOrNull(currentChannelUrlIdx)}")
+                android.util.Log.e("LiveScreen", "======================")
+                bufferingStartTime = 0L  // 重置缓冲时间
+                
+                // 构建用户友好的错误信息
+                val errorMessage = when (error.errorCode) {
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败，设备可能不支持此视频格式"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED -> "解码器查询失败"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED -> "视频解码失败，设备可能不支持此视频编码"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> "网络错误"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "网络连接失败"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接超时"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "视频文件格式错误"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "不支持的视频容器格式"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "播放列表格式错误"
+                    else -> error.message ?: "播放错误(代码:${error.errorCode})"
+                }
                 
                 // 当解析容器不支持时，尝试其他内容类型
                 if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED) {
@@ -182,14 +277,13 @@ fun LiveScreen(
                         }
                         else -> {
                             android.util.Log.e("LiveScreen", "所有内容类型都尝试过，播放失败，切换到下一个频道")
-                            // 所有内容类型都尝试过，通知 ViewModel 处理错误
-                            viewModel.handlePlayError(error.message)
+                            viewModel.handlePlayError(errorMessage)
                         }
                     }
                 } else {
                     // 其他播放错误，直接通知 ViewModel 处理
-                    android.util.Log.e("LiveScreen", "播放错误，通知 ViewModel 处理")
-                    viewModel.handlePlayError(error.message)
+                    android.util.Log.e("LiveScreen", "播放错误: $errorMessage，通知 ViewModel 处理")
+                    viewModel.handlePlayError(errorMessage)
                 }
             }
         }
@@ -199,24 +293,55 @@ fun LiveScreen(
         }
     }
 
-    // 网速计算
+    // 缓冲超时检测 + 解码失败检测（有声音但无画面）
     LaunchedEffect(exoPlayer) {
+        var noVideoCount = 0  // 无画面计数器
+        
         while (true) {
             delay(1000)
-            val currentBytes = exoPlayer.totalBufferedDuration
             val currentTime = System.currentTimeMillis()
             
-            if (lastSpeedUpdateTime > 0) {
-                val bytesDiff = currentBytes - lastBytesTransferred
-                val timeDiff = currentTime - lastSpeedUpdateTime
-                if (timeDiff > 0) {
-                    // 转换为 KB/s
-                    networkSpeed = (bytesDiff / 1024 * 1000 / timeDiff)
+            // 检测缓冲超时
+            if (bufferingStartTime > 0) {
+                val bufferingDuration = currentTime - bufferingStartTime
+                android.util.Log.d("LiveScreen", "缓冲中... 已等待 ${bufferingDuration/1000}秒, 频道: ${currentChannel.name}, 播放状态: ${exoPlayer.playbackState}")
+                
+                if (bufferingDuration > bufferingTimeoutMs) {
+                    android.util.Log.w("LiveScreen", "===== 缓冲超时 =====")
+                    android.util.Log.w("LiveScreen", "超时时长: ${bufferingTimeoutMs/1000}秒")
+                    android.util.Log.w("LiveScreen", "频道: ${currentChannel.name}")
+                    android.util.Log.w("LiveScreen", "URL: ${currentChannel.urlList.getOrNull(currentChannelUrlIdx)}")
+                    android.util.Log.w("LiveScreen", "播放器状态: ${exoPlayer.playbackState}")
+                    android.util.Log.w("LiveScreen", "====================")
+                    bufferingStartTime = 0L  // 重置，避免重复触发
+                    viewModel.handlePlayError("视频加载超时(${bufferingTimeoutMs/1000}秒)，设备可能不支持此视频格式")
                 }
             }
             
-            lastBytesTransferred = currentBytes
-            lastSpeedUpdateTime = currentTime
+            // 检测解码失败：播放就绪但无视频画面（有声音但黑屏）
+            // 检查是否有音频轨道但没有视频轨道，或者视频尺寸为0
+            val hasAudio = exoPlayer.audioFormat != null
+            val hasVideo = exoPlayer.videoFormat != null && exoPlayer.videoFormat?.width ?: 0 > 0
+            
+            if (exoPlayer.playbackState == Player.STATE_READY && 
+                exoPlayer.isPlaying && 
+                hasAudio && !hasVideo) {
+                noVideoCount++
+                android.util.Log.w("LiveScreen", "警告：有声音但无画面，计数: $noVideoCount, 频道: ${currentChannel.name}")
+                
+                if (noVideoCount >= 5) {  // 连续5秒有声音但无画面
+                    android.util.Log.e("LiveScreen", "===== 视频解码失败（有声音但黑屏）=====")
+                    android.util.Log.e("LiveScreen", "频道: ${currentChannel.name}")
+                    android.util.Log.e("LiveScreen", "URL: ${currentChannel.urlList.getOrNull(currentChannelUrlIdx)}")
+                    android.util.Log.e("LiveScreen", "播放器状态: READY, isPlaying: ${exoPlayer.isPlaying}")
+                    android.util.Log.e("LiveScreen", "音频: ${exoPlayer.audioFormat?.codecs}, 视频: ${exoPlayer.videoFormat?.codecs}")
+                    android.util.Log.e("LiveScreen", "================================")
+                    noVideoCount = 0
+                    viewModel.handlePlayError("视频解码失败（有声音但黑屏），设备不支持此视频编码格式")
+                }
+            } else {
+                noVideoCount = 0  // 正常播放，重置计数器
+            }
         }
     }
 
@@ -443,16 +568,20 @@ fun LiveScreen(
                 }
                 .handleLiveKeyEvents(
                     onUp = {
+                        android.util.Log.d("LiveScreen", "按下上键, isPanelVisible=$isPanelVisible")
                         if (isPanelVisible) {
                             // 频道列表打开时，上下键在列表内处理
                         } else {
+                            android.util.Log.d("LiveScreen", "切换到上一个频道")
                             viewModel.changeToPreviousChannel()
                         }
                     },
                     onDown = {
+                        android.util.Log.d("LiveScreen", "按下下键, isPanelVisible=$isPanelVisible")
                         if (isPanelVisible) {
                             // 频道列表打开时，上下键在列表内处理
                         } else {
+                            android.util.Log.d("LiveScreen", "切换到下一个频道")
                             viewModel.changeToNextChannel()
                         }
                     },
@@ -466,31 +595,29 @@ fun LiveScreen(
                         }
                     },
                     onRight = {
-                        when {
-                            isPanelVisible -> {
-                                // 频道列表已打开，右键关闭列表
-                                viewModel.hidePanel()
-                            }
-                            isStatusBarVisible -> {
-                                // 状态栏已打开，右键关闭状态栏
-                                isStatusBarVisible = false
-                            }
-                            else -> {
-                                // 什么都没打开，右键呼出状态栏
-                                isStatusBarVisible = true
+                        if (!isPanelVisible && !isStatusBarVisible) {
+                            // 右键切换线路（只在主界面有效）
+                            if (currentChannel.urlList.size > 1) {
+                                val nextUrlIdx = if (currentChannelUrlIdx < currentChannel.urlList.size - 1) {
+                                    currentChannelUrlIdx + 1
+                                } else {
+                                    0
+                                }
+                                viewModel.changeUrlIdx(nextUrlIdx - currentChannelUrlIdx)
+                                Toast.makeText(context, "切换到线路${nextUrlIdx + 1}/${currentChannel.urlList.size}", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "当前频道只有一条线路", Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
                     onSelect = {
-                        if (!isPanelVisible) {
-                            // 确认键切换线路
-                            if (currentChannel.urlList.size > 1) {
-                                viewModel.changeUrlIdx(1)
-                            }
-                        }
+                        // 确认键功能保留
                     },
                     onSettings = {
-                        // 可以打开快速设置面板
+                        // 菜单键呼出状态栏
+                        if (!isPanelVisible) {
+                            isStatusBarVisible = !isStatusBarVisible
+                        }
                     },
                     onNumber = { number ->
                         // 只有启用数字选台时才处理数字键
@@ -589,7 +716,6 @@ fun LiveScreen(
                 currentProgrammesProvider = { if (epgEnable) epgList.currentProgrammes(currentChannel) else null },
                 videoWidthProvider = { videoWidth },
                 videoHeightProvider = { videoHeight },
-                networkSpeedProvider = { networkSpeed },
                 videoAspectRatioProvider = { videoAspectRatio },
                 sourceListProvider = { sourceList },
                 currentSourceUrlProvider = { currentSourceUrl },
@@ -603,6 +729,10 @@ fun LiveScreen(
                 onSwitchSource = { url ->
                     // 切换源逻辑
                     viewModel.switchSource(url)
+                },
+                onSwitchRoute = { routeIdx ->
+                    // 切换线路逻辑
+                    viewModel.changeUrlIdx(routeIdx - currentChannelUrlIdx)
                 },
                 onRefreshAllSources = {
                     // 刷新全部源逻辑

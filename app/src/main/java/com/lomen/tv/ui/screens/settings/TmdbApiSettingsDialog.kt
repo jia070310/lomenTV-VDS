@@ -10,12 +10,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -31,13 +36,23 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import androidx.tv.material3.Card
+import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Icon
+import androidx.tv.material3.IconButton
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.google.zxing.BarcodeFormat
@@ -98,136 +113,152 @@ fun TmdbApiSettingsDialog(
         }
     }
     
-    Dialog(onDismissRequest = {
-        tmdbApiViewModel.stopConfigServer()
-        onDismiss()
-    }) {
+    Dialog(
+        onDismissRequest = {
+            tmdbApiViewModel.stopConfigServer()
+            onDismiss()
+        },
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        // 使用 Box 包裹，通过 fillMaxSize 和 contentAlignment 实现居中
         Box(
-            modifier = Modifier
-                .width(520.dp)  // 固定宽度，避免内容变化时尺寸改变
-                .clip(RoundedCornerShape(16.dp))
-                .background(BackgroundDark)
-                .padding(32.dp)
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // 标题
-                Text(
-                    text = "TMDB API 设置",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = TextPrimary
-                )
-                
-                // 说明文字
-                Text(
-                    text = "扫描二维码打开手机网页，输入您的 TMDB API Key",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
-                )
-                
-                // 二维码 - 增大尺寸，减少边距让二维码更大
-                if (qrCodeBitmap != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(320.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.White)
-                            .padding(8.dp),  // 减少边距，让二维码更大
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Image(
-                            bitmap = qrCodeBitmap.asImageBitmap(),
-                            contentDescription = "配置二维码",
-                            modifier = Modifier
-                                .fillMaxSize()  // 填满整个可用空间
-                                .padding(4.dp)  // 少量内边距避免贴边
-                        )
-                    }
-                }
-                
-                // 服务器地址
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "或手动访问地址:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = serverUrl,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = PrimaryYellow
-                    )
-                }
-                
-                // 按钮区域
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    // 关闭按钮 - 未选中时灰色底白色字，选中时黄色底黑字
-                    var isCloseButtonFocused by remember { mutableStateOf(false) }
-                    Button(
-                        onClick = {
+            Card(
+                onClick = {},
+                colors = CardDefaults.colors(
+                    containerColor = SurfaceDark,
+                    focusedContainerColor = SurfaceDark
+                ),
+                modifier = Modifier
+                    .width(320.dp)  // 缩小宽度
+                    .height(365.dp)  // 缩小高度
+                    .onPreviewKeyEvent { keyEvent ->
+                        // 拦截所有方向键，防止光标移出窗口
+                        if (keyEvent.key == Key.DirectionUp ||
+                            keyEvent.key == Key.DirectionDown ||
+                            keyEvent.key == Key.DirectionLeft ||
+                            keyEvent.key == Key.DirectionRight
+                        ) {
+                            true
+                        } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                            // 按返回键关闭窗口
                             tmdbApiViewModel.stopConfigServer()
                             onDismiss()
-                        },
-                        colors = ButtonDefaults.colors(
-                            containerColor = SurfaceDark,
-                            focusedContainerColor = PrimaryYellow,
-                            contentColor = TextPrimary,
-                            focusedContentColor = Color.Black
-                        ),
-                        modifier = Modifier
-                            .focusRequester(closeButtonFocus)
-                            .onFocusChanged { isCloseButtonFocused = it.isFocused }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // 标题栏 - 右上角关闭按钮
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "关闭",
-                            color = if (isCloseButtonFocused) Color.Black else TextPrimary
+                            text = "TMDB API 设置",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = TextPrimary
                         )
-                    }
-                    
-                    if (hasCustomKey) {
-                        Spacer(modifier = Modifier.width(16.dp))
-                        
-                        // 删除 API 按钮 - 未选中时灰色底白色字，选中时黄色底黑字
-                        var isDeleteButtonFocused by remember { mutableStateOf(false) }
-                        Button(
+                        // 右上角关闭按钮 - 黄色底黑色图标
+                        IconButton(
                             onClick = {
-                                tmdbApiViewModel.clearApiKey()
-                                Toast.makeText(context, "API 已删除", Toast.LENGTH_SHORT).show()
+                                tmdbApiViewModel.stopConfigServer()
+                                onDismiss()
                             },
-                            colors = ButtonDefaults.colors(
-                                containerColor = SurfaceDark,
+                            colors = androidx.tv.material3.IconButtonDefaults.colors(
+                                containerColor = Color.Transparent,
+                                contentColor = TextMuted,
                                 focusedContainerColor = PrimaryYellow,
-                                contentColor = TextPrimary,
                                 focusedContentColor = Color.Black
                             ),
-                            modifier = Modifier.onFocusChanged { isDeleteButtonFocused = it.isFocused }
+                            modifier = Modifier
+                                .size(40.dp)
+                                .focusRequester(closeButtonFocus)
                         ) {
-                            Text(
-                                text = "删除 API",
-                                color = if (isDeleteButtonFocused) Color.Black else TextPrimary
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "关闭",
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 说明文字
+                    Text(
+                        text = "扫描二维码打开手机网页，输入您的 TMDB API Key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 二维码 - 使用百分比尺寸以适应不同分辨率，缩小高度
+                    if (qrCodeBitmap != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(0.6f)
+                                .heightIn(max = 180.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White)
+                                .padding(10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = qrCodeBitmap.asImageBitmap(),
+                                contentDescription = "配置二维码",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 服务器地址
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "或手动访问地址:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = serverUrl,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = PrimaryYellow
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 提示信息
+                    Text(
+                        text = "提示: 在 https://www.themoviedb.org/settings/api 申请免费 API Key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        textAlign = TextAlign.Center
+                    )
                 }
-                
-                // 提示信息
-                Text(
-                    text = "提示: 在 https://www.themoviedb.org/settings/api 申请免费 API Key",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
-                )
             }
         }
     }
-    
+
     // 自动聚焦到关闭按钮
     LaunchedEffect(Unit) {
         closeButtonFocus.requestFocus()

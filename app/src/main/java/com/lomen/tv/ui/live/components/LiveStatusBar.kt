@@ -1,6 +1,7 @@
 package com.lomen.tv.ui.live.components
 
 import android.content.Context
+import android.net.TrafficStats
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -28,6 +29,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,12 +55,12 @@ import androidx.tv.foundation.lazy.list.itemsIndexed
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
+import androidx.tv.material3.ListItem
+import androidx.tv.material3.ListItemDefaults
 import com.lomen.tv.data.preferences.LiveSettingsPreferences
 import com.lomen.tv.service.WebDavConfigServer
 import java.net.NetworkInterface
 import java.util.Collections
-import androidx.tv.material3.ListItem
-import androidx.tv.material3.ListItemDefaults
 import androidx.tv.material3.Surface
 import com.lomen.tv.data.model.live.CurrentProgramme
 import com.lomen.tv.data.model.live.LiveChannel
@@ -82,7 +84,6 @@ fun LiveStatusBar(
     currentProgrammesProvider: () -> CurrentProgramme? = { null },
     videoWidthProvider: () -> Int = { 0 },
     videoHeightProvider: () -> Int = { 0 },
-    networkSpeedProvider: () -> Long = { 0L },
     videoAspectRatioProvider: () -> LiveSettingsPreferences.Companion.VideoAspectRatio = { 
         LiveSettingsPreferences.Companion.VideoAspectRatio.ORIGINAL 
     },
@@ -92,6 +93,7 @@ fun LiveStatusBar(
     onClearCache: () -> Unit = {},
     onSwitchSource: (String) -> Unit = {},
     onRefreshAllSources: () -> Unit = {},
+    onSwitchRoute: (Int) -> Unit = {},  // 线路切换回调
     onClose: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -112,7 +114,7 @@ fun LiveStatusBar(
     
     // 自动关闭逻辑：5秒无操作后关闭
     LaunchedEffect(lastInteractionTime, showSourceDialog, showQrcodeDialog) {
-        if (!showSourceDialog && !showQrcodeDialog) { // 如果源选择对话框和二维码对话框都没有打开
+        if (!showSourceDialog && !showQrcodeDialog) {
             delay(5000) // 5秒延迟
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastInteractionTime >= 5000) {
@@ -180,7 +182,6 @@ fun LiveStatusBar(
                     LiveStatusBarPlayerInfo(
                         videoWidthProvider = videoWidthProvider,
                         videoHeightProvider = videoHeightProvider,
-                        networkSpeedProvider = networkSpeedProvider,
                     )
 
                     // 底部操作按钮
@@ -192,6 +193,7 @@ fun LiveStatusBar(
                         onChangeVideoAspectRatio = onChangeVideoAspectRatio,
                         onClearCache = onClearCache,
                         onSwitchSource = onSwitchSource,
+                        onSwitchRoute = onSwitchRoute,
                         showSourceDialogProvider = { showSourceDialog },
                         onShowSourceDialogChange = { showSourceDialog = it },
                         showToastProvider = { showToast },
@@ -235,18 +237,15 @@ fun LiveStatusBar(
                         // 保存接收到的配置
                         kotlinx.coroutines.runBlocking {
                             if (config.liveSourceUrl.isNotBlank()) {
-                                liveSettingsPreferences.setLiveSourceUrl(config.liveSourceUrl)
                                 liveSettingsPreferences.addLiveSourceToHistory(
                                     config.liveSourceName.takeIf { it.isNotBlank() } ?: "自定义源",
                                     config.liveSourceUrl
                                 )
                             }
                             if (config.epgUrl.isNotBlank()) {
-                                liveSettingsPreferences.setEpgUrl(config.epgUrl)
                                 liveSettingsPreferences.addEpgUrlToHistory(config.epgUrl)
                             }
                             if (config.userAgent.isNotBlank()) {
-                                liveSettingsPreferences.setUserAgent(config.userAgent)
                                 liveSettingsPreferences.addUserAgentToHistory(config.userAgent)
                             }
                         }
@@ -265,6 +264,7 @@ fun LiveStatusBar(
             showDialogProvider = { showQrcodeDialog },
             onDismissRequest = { showQrcodeDialog = false }
         )
+        
     }
 }
 
@@ -393,8 +393,10 @@ private fun LiveStatusBarPlayerInfo(
     modifier: Modifier = Modifier,
     videoWidthProvider: () -> Int = { 0 },
     videoHeightProvider: () -> Int = { 0 },
-    networkSpeedProvider: () -> Long = { 0L },
 ) {
+    // 使用 TrafficStats 获取实时网速（参考 mytv-android-main 实现）
+    val networkSpeed = rememberNetSpeed()
+    
     CompositionLocalProvider(
         LocalTextStyle provides MaterialTheme.typography.bodyLarge,
         LocalContentColor provides Color.White,
@@ -402,7 +404,6 @@ private fun LiveStatusBarPlayerInfo(
         Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             val videoWidth = videoWidthProvider()
             val videoHeight = videoHeightProvider()
-            val networkSpeed = networkSpeedProvider()
             Text(
                 text = if (videoWidth > 0 && videoHeight > 0) 
                     "分辨率：${videoWidth}×${videoHeight}" 
@@ -410,13 +411,49 @@ private fun LiveStatusBarPlayerInfo(
                     "分辨率：检测中",
             )
             Text(
-                text = if (networkSpeed > 0) 
-                    "网速：${networkSpeed}KB/s"
-                else 
-                    "网速：0KB/s",
+                text = if (networkSpeed > 0) {
+                    // 转换为 KB/s 或 MB/s 显示
+                    if (networkSpeed < 1024 * 999) {
+                        "网速：${networkSpeed / 1024}KB/s"
+                    } else {
+                        "网速：${java.text.DecimalFormat("#.#").format(networkSpeed / 1024 / 1024f)}MB/s"
+                    }
+                } else {
+                    "网速：0KB/s"
+                },
             )
         }
     }
+}
+
+/**
+ * 获取实时网速 - 使用系统 TrafficStats
+ * 完全参考 mytv-android-main 的实现
+ */
+@Composable
+private fun rememberNetSpeed(): Long {
+    var netSpeed by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(Unit) {
+        var lastTotalRxBytes = TrafficStats.getTotalRxBytes()
+        var lastTimeStamp = System.currentTimeMillis()
+
+        while (true) {
+            delay(1000)
+            val nowTotalRxBytes = TrafficStats.getTotalRxBytes()
+            val nowTimeStamp = System.currentTimeMillis()
+            val timeDiff = nowTimeStamp - lastTimeStamp
+            if (timeDiff > 0) {
+                val speed = (nowTotalRxBytes - lastTotalRxBytes) * 1000 / timeDiff
+                lastTimeStamp = nowTimeStamp
+                lastTotalRxBytes = nowTotalRxBytes
+                netSpeed = speed // 返回字节/秒，显示时再转换为 KB/s
+                android.util.Log.d("LiveStatusBar", "网速: ${speed}B/s, 原始字节: $nowTotalRxBytes")
+            }
+        }
+    }
+
+    return netSpeed
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -432,6 +469,7 @@ private fun LiveStatusBarActions(
     onChangeVideoAspectRatio: () -> Unit = {},
     onClearCache: () -> Unit = {},
     onSwitchSource: (String) -> Unit = {},
+    onSwitchRoute: (Int) -> Unit = {},
     showSourceDialogProvider: () -> Boolean = { false },
     onShowSourceDialogChange: (Boolean) -> Unit = {},
     showToastProvider: () -> Boolean = { false },
@@ -441,6 +479,8 @@ private fun LiveStatusBarActions(
     onUserAction: () -> Unit = {},
 ) {
     val channel = channelProvider()
+    val currentUrlIdx = currentChannelUrlIdxProvider()
+    val hasMultipleRoutes = channel.urlList.size > 1
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -490,13 +530,19 @@ private fun LiveStatusBarActions(
             },
         )
 
-        // 多线路按钮（如果有多个线路）
-        if (channel.urlList.size > 1) {
+        // 线路切换按钮（只有多线路时才显示）- 点击直接切换到下一线路
+        if (hasMultipleRoutes) {
             LiveStatusBarButton(
-                title = "多线路",
+                title = "线路${currentUrlIdx + 1}/${channel.urlList.size}",
                 onSelect = { 
                     onUserAction()
-                    /* TODO: 显示线路选择对话框 */ 
+                    // 直接切换到下一线路
+                    val nextRouteIdx = if (currentUrlIdx < channel.urlList.size - 1) {
+                        currentUrlIdx + 1
+                    } else {
+                        0 // 循环回到第一条线路
+                    }
+                    onSwitchRoute(nextRouteIdx)
                 },
             )
         }
