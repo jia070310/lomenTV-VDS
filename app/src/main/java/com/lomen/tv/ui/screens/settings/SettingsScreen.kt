@@ -1,5 +1,6 @@
 package com.lomen.tv.ui.screens.settings
 
+import com.lomen.tv.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -946,8 +947,8 @@ private fun AboutSection(
         Row(
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // 版本更新
-            val currentVersion = "1.0.7"
+            // 版本更新 - 从BuildConfig动态获取当前版本号
+            val currentVersion = BuildConfig.VERSION_NAME
             val versionSubtitle = if (hasUpdate && versionInfo != null) {
                 "当前版本: v$currentVersion | 最新版本: v${versionInfo.versionName}"
             } else {
