@@ -23,6 +23,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -47,6 +50,7 @@ fun VersionUpdateDialog(
     
     // 当对话框显示时请求焦点到取消按钮
     LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
         cancelFocusRequester.requestFocus()
     }
     
@@ -71,9 +75,24 @@ fun VersionUpdateDialog(
                 modifier = Modifier
                     .width(600.dp)
                     .heightIn(min = 400.dp, max = 600.dp)
-                    .focusProperties { 
-                        // 阻止焦点逃出对话框
-                        exit = { FocusRequester.Cancel }
+                    .onPreviewKeyEvent { keyEvent ->
+                        // 拦截方向键，防止焦点逃出对话框
+                        if (keyEvent.type == KeyEventType.KeyDown) {
+                            when (keyEvent.key) {
+                                Key.DirectionUp, Key.DirectionDown,
+                                Key.DirectionLeft, Key.DirectionRight -> {
+                                    // 允许在按钮之间移动，但不出对话框
+                                    false
+                                }
+                                Key.Back -> {
+                                    onCancel()
+                                    true
+                                }
+                                else -> false
+                            }
+                        } else {
+                            false
+                        }
                     },
                 colors = CardDefaults.colors(
                     containerColor = Color(0xFF333333)
@@ -136,6 +155,18 @@ fun VersionUpdateDialog(
                                 .focusRequester(cancelFocusRequester)
                                 .focusable()
                                 .onFocusChanged { cancelButtonFocused = it.isFocused }
+                                .onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown) {
+                                        when (keyEvent.key) {
+                                            Key.DirectionRight -> {
+                                                // 右方向键移动到更新按钮
+                                                updateFocusRequester.requestFocus()
+                                                true
+                                            }
+                                            else -> false
+                                        }
+                                    } else false
+                                }
                                 .clickable(
                                     onClick = onCancel,
                                     indication = null,
@@ -164,6 +195,18 @@ fun VersionUpdateDialog(
                                 .focusRequester(updateFocusRequester)
                                 .focusable()
                                 .onFocusChanged { updateButtonFocused = it.isFocused }
+                                .onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type == KeyEventType.KeyDown) {
+                                        when (keyEvent.key) {
+                                            Key.DirectionLeft -> {
+                                                // 左方向键移动到取消按钮
+                                                cancelFocusRequester.requestFocus()
+                                                true
+                                            }
+                                            else -> false
+                                        }
+                                    } else false
+                                }
                                 .clickable(
                                     onClick = onUpdate,
                                     indication = null,
