@@ -95,15 +95,11 @@ class LiveViewModel @Inject constructor(
     val epgEnable: StateFlow<Boolean> = liveSettingsPreferences.epgEnable
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
-    // 播放错误计数
+    // 播放错误计数（旧版兼容）
     private val _playErrorCount = MutableStateFlow(0)
     val playErrorCount: StateFlow<Int> = _playErrorCount.asStateFlow()
-    
-    // 当前线路重试计数（用于线路切换逻辑）
-    private var routeRetryCount = 0
-    private val maxRouteRetries = 3  // 每个线路最多重试3次
 
-    // 错误提示信息
+    // 错误提示信息（旧版兼容）
     private val _errorToastMessage = MutableStateFlow<String?>(null)
     val errorToastMessage: StateFlow<String?> = _errorToastMessage.asStateFlow()
 
@@ -114,8 +110,18 @@ class LiveViewModel @Inject constructor(
     // 错误对话框消息
     private val _errorDialogMessage = MutableStateFlow("")
     val errorDialogMessage: StateFlow<String> = _errorDialogMessage.asStateFlow()
+    
+    // 新的错误处理器
+    private var errorHandler: LivePlayerErrorHandler? = null
+    
+    // 重试状态（供UI显示）- 在 initErrorHandler 中初始化
+    private lateinit var _retryStatus: MutableStateFlow<String?>
+    val retryStatus: StateFlow<String?> get() = _retryStatus.asStateFlow()
 
     init {
+        // 初始化错误处理器
+        initErrorHandler()
+        
         // 加载保存的设置和直播源
         viewModelScope.launch {
             val savedUrl = liveSettingsPreferences.liveSourceUrl.first()
@@ -166,6 +172,57 @@ class LiveViewModel @Inject constructor(
         
         // 启动定时刷新任务
         startPeriodicRefresh()
+    }
+    
+    /**
+     * 初始化错误处理器
+     */
+    private fun initErrorHandler() {
+        // 初始化重试状态
+        _retryStatus = MutableStateFlow(null)
+        
+        errorHandler = LivePlayerErrorHandler(
+            coroutineScope = viewModelScope,
+            onRetry = { channel, urlIdx ->
+                // 重试当前URL：重新触发播放
+                android.util.Log.d("LiveViewModel", "重试播放: ${channel.name}, URL索引: $urlIdx")
+                _currentChannel.value = channel
+                _currentChannelUrlIdx.value = urlIdx
+            },
+            onSwitchUrl = { channel, nextUrlIdx ->
+                // 切换到同频道的下一个URL
+                android.util.Log.d("LiveViewModel", "切换URL: ${channel.name}, 新URL索引: $nextUrlIdx")
+                _currentChannel.value = channel
+                _currentChannelUrlIdx.value = nextUrlIdx
+                _errorToastMessage.value = "线路${nextUrlIdx}失败，切换到线路${nextUrlIdx + 1}..."
+            },
+            onSwitchChannel = { currentChannel ->
+                // 切换到下一个频道
+                android.util.Log.d("LiveViewModel", "当前频道所有URL失败，切换到下一个频道")
+                // 延迟1秒后切换到下一个频道
+                viewModelScope.launch {
+                    kotlinx.coroutines.delay(1000)
+                    changeToNextChannel()
+                }
+                _errorToastMessage.value = "播放错误，自动切换下一个频道"
+            },
+            onSourceSwitchRequired = {
+                // 触发直播源切换
+                android.util.Log.w("LiveViewModel", "触发自动切换直播源")
+                viewModelScope.launch {
+                    val totalChannels = repository.channelGroupList.value.allChannels().size
+                    if (errorHandler?.checkAndSwitchSource(totalChannels) == true) {
+                        _errorDialogMessage.value = "连续多个频道无法播放，正在自动切换直播源..."
+                        _showErrorDialog.value = true
+                        switchToNextSource()
+                    }
+                }
+            },
+            onRetryStatusChanged = { status ->
+                // 更新重试状态供UI显示
+                _retryStatus.value = status
+            }
+        )
     }
     
     /**
@@ -253,8 +310,8 @@ class LiveViewModel @Inject constructor(
         _currentChannelUrlIdx.value = urlIdx
         _isTempPanelVisible.value = true
         hidePanel()
-        // 重置重试计数
-        routeRetryCount = 0
+        // 通知错误处理器频道已切换
+        errorHandler?.onChannelChanged()
     }
 
     /**
@@ -297,58 +354,29 @@ class LiveViewModel @Inject constructor(
 
     /**
      * 处理播放错误
-     * 智能重试逻辑：
-     * 1. 先重试当前线路最多3次
-     * 2. 如果当前频道有多线路，切换到下一个线路继续重试
-     * 3. 所有线路都试过后，切换到下一个频道
-     * 4. 连续错误10次后提示切换直播源
+     * 使用新的错误处理器实现四阶段智能重试：
+     * 1. 重试当前URL（最多3次，间隔3秒）
+     * 2. 切换到同频道的下一个URL
+     * 3. 切换到下一个频道
+     * 4. 连续失败超过阈值，触发直播源切换
      */
     fun handlePlayError(errorMessage: String? = null) {
-        viewModelScope.launch {
-            _playErrorCount.value++
-            val currentCount = _playErrorCount.value
-            val currentChannel = _currentChannel.value
-            val currentUrlIdx = _currentChannelUrlIdx.value
-            val hasMultipleRoutes = currentChannel.urlList.size > 1
-            
-            android.util.Log.w("LiveViewModel", "播放错误，当前错误次数: $currentCount, 线路重试: $routeRetryCount/$maxRouteRetries, 当前线路: $currentUrlIdx/${currentChannel.urlList.size}")
-            
-            if (currentCount >= 10) {
-                // 连续错误10次，显示错误对话框并尝试切换直播源
-                _errorDialogMessage.value = "连续播放错误 $currentCount 次，正在自动切换直播源..."
-                _showErrorDialog.value = true
-                
-                // 尝试切换到下一个直播源
-                switchToNextSource()
-            } else {
-                // 增加线路重试计数
-                routeRetryCount++
-                
-                if (routeRetryCount < maxRouteRetries) {
-                    // 当前线路还没重试够3次，继续重试当前线路
-                    _errorToastMessage.value = "播放错误，重试中... (${routeRetryCount}/$maxRouteRetries)"
-                    android.util.Log.d("LiveViewModel", "重试当前线路: $currentUrlIdx")
-                    // 重试当前线路：触发重新播放（通过切换线路索引到自身来触发）
-                    _currentChannelUrlIdx.value = currentUrlIdx
-                } else if (hasMultipleRoutes && currentUrlIdx < currentChannel.urlList.size - 1) {
-                    // 当前线路已重试3次，且还有其他线路，切换到下一个线路
-                    val nextRouteIdx = currentUrlIdx + 1
-                    _errorToastMessage.value = "线路${currentUrlIdx + 1}失败，切换到线路${nextRouteIdx + 1}..."
-                    android.util.Log.d("LiveViewModel", "切换线路: $currentUrlIdx -> $nextRouteIdx")
-                    routeRetryCount = 0  // 重置线路重试计数
-                    _currentChannelUrlIdx.value = nextRouteIdx
-                } else {
-                    // 所有线路都试过了，或者只有一个线路，切换到下一个频道
-                    _errorToastMessage.value = "播放错误，自动切换下一个频道 ($currentCount/10)"
-                    android.util.Log.d("LiveViewModel", "切换到下一个频道")
-                    routeRetryCount = 0  // 重置线路重试计数
-                    
-                    // 延迟1秒后切换到下一个频道
-                    kotlinx.coroutines.delay(1000)
-                    changeToNextChannel()
-                }
-            }
-        }
+        val currentChannel = _currentChannel.value
+        val currentUrlIdx = _currentChannelUrlIdx.value
+        
+        android.util.Log.w("LiveViewModel", "播放错误，使用新的错误处理器: ${currentChannel.name}, URL索引: $currentUrlIdx")
+        
+        // 使用新的错误处理器
+        errorHandler?.handleError(currentChannel, currentUrlIdx)
+    }
+    
+    /**
+     * 播放成功回调
+     * 重置错误处理器的计数器
+     */
+    fun onPlaybackSuccess() {
+        errorHandler?.onPlaybackSuccess()
+        _playErrorCount.value = 0
     }
 
     /**
@@ -420,8 +448,8 @@ class LiveViewModel @Inject constructor(
         val newIdx = (currentIdx + delta).coerceIn(0, channel.urlList.size - 1)
         android.util.Log.d("LiveViewModel", "切换线路: $currentIdx -> $newIdx (共${channel.urlList.size}个线路)")
         _currentChannelUrlIdx.value = newIdx
-        // 重置线路重试计数
-        routeRetryCount = 0
+        // 通知错误处理器频道已切换（重置重试状态）
+        errorHandler?.onChannelChanged()
     }
 
     /**

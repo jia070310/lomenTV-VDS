@@ -4,13 +4,18 @@ import android.net.Uri
 import android.view.KeyEvent
 import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.Color
@@ -107,6 +112,9 @@ fun LiveScreen(
     val errorToastMessage by viewModel.errorToastMessage.collectAsState()
     val showErrorDialog by viewModel.showErrorDialog.collectAsState()
     val errorDialogMessage by viewModel.errorDialogMessage.collectAsState()
+    
+    // 重试状态（来自新的错误处理器）
+    val retryStatus by viewModel.retryStatus.collectAsState()
     
     val configuration = LocalConfiguration.current
 
@@ -213,6 +221,8 @@ fun LiveScreen(
                         exoPlayer.audioFormat?.let { format ->
                             android.util.Log.d("LiveScreen", "音频格式: ${format.sampleMimeType}, 编码: ${format.codecs}, 声道: ${format.channelCount}, 采样率: ${format.sampleRate}")
                         }
+                        // 通知 ViewModel 播放成功，重置错误处理器
+                        viewModel.onPlaybackSuccess()
                     }
                     Player.STATE_BUFFERING -> {
                         // 开始缓冲时记录时间
@@ -765,7 +775,47 @@ fun LiveScreen(
             }
         }
         
-        // Toast 错误提示
+        // 重试状态提示（新的错误处理器）
+        retryStatus?.let { status ->
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    modifier = Modifier
+                        .background(
+                            color = androidx.compose.ui.graphics.Color(0xCC000000),
+                            shape = androidx.compose.material3.MaterialTheme.shapes.medium
+                        )
+                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = androidx.compose.ui.graphics.Color(0xFFfddd0e),
+                        strokeWidth = 2.5.dp
+                    )
+                    androidx.compose.foundation.layout.Column(
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        androidx.compose.material3.Text(
+                            text = "视频源连接失败",
+                            style = androidx.compose.material3.MaterialTheme.typography.titleSmall,
+                            color = androidx.compose.ui.graphics.Color.White,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                        )
+                        androidx.compose.material3.Text(
+                            text = status,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                            color = androidx.compose.ui.graphics.Color(0xFFfddd0e)
+                        )
+                    }
+                }
+            }
+        }
+        
+        // Toast 错误提示（旧版，保留兼容）
         errorToastMessage?.let { message ->
             Box(
                 modifier = Modifier.fillMaxSize(),
