@@ -58,6 +58,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -131,6 +132,7 @@ fun SettingsScreen(
     var showForceRescrapeDialog by remember { mutableStateOf(false) }
     var showClearWatchHistoryDialog by remember { mutableStateOf(false) }
     var showTmdbApiDialog by remember { mutableStateOf(false) }
+    var showClearTmdbApiDialog by remember { mutableStateOf(false) }
     var showSuccessMessage by remember { mutableStateOf<String?>(null) }
     
     // TMDB API 状态 - 提前声明以便在 UI 中使用
@@ -174,6 +176,7 @@ fun SettingsScreen(
                 onShowForceRescrapeDialog = { showForceRescrapeDialog = true },
                 onShowClearWatchHistoryDialog = { showClearWatchHistoryDialog = true },
                 onShowTmdbApiDialog = { showTmdbApiDialog = true },
+                onShowClearTmdbApiDialog = { showClearTmdbApiDialog = true },
                 onShowVersionUpdateDialog = { showVersionUpdateDialog = true },
                 hasUpdate = hasUpdate,
                 versionInfo = versionInfo,
@@ -253,6 +256,7 @@ fun SettingsScreen(
     val onShowForceRescrapeDialog = { showForceRescrapeDialog = true }
     val onShowClearWatchHistoryDialog = { showClearWatchHistoryDialog = true }
     val onShowTmdbApiDialog = { showTmdbApiDialog = true }
+    val onShowClearTmdbApiDialog = { showClearTmdbApiDialog = true }
     
     // 检查版本更新
     LaunchedEffect(Unit) {
@@ -348,6 +352,21 @@ fun SettingsScreen(
     if (showTmdbApiDialog) {
         TmdbApiSettingsDialog(
             onDismiss = { showTmdbApiDialog = false }
+        )
+    }
+    
+    // 清除 TMDB API Key 对话框
+    if (showClearTmdbApiDialog) {
+        ClearTmdbApiDialog(
+            hasCustomKey = hasCustomTmdbKey && 
+                          currentApiKey.isNotBlank() && 
+                          currentApiKey != TmdbApiPreferences.DEFAULT_API_KEY,
+            onConfirm = {
+                tmdbApiViewModel.clearApiKey()
+                showClearTmdbApiDialog = false
+                showSuccessMessage = "TMDB API Key 已清除"
+            },
+            onDismiss = { showClearTmdbApiDialog = false }
         )
     }
     
@@ -575,6 +594,7 @@ private fun SettingsContent(
     onShowForceRescrapeDialog: () -> Unit,
     onShowClearWatchHistoryDialog: () -> Unit,
     onShowTmdbApiDialog: () -> Unit,
+    onShowClearTmdbApiDialog: () -> Unit,
     onShowVersionUpdateDialog: () -> Unit,
     hasUpdate: Boolean,
     versionInfo: VersionInfo?,
@@ -626,6 +646,7 @@ private fun SettingsContent(
                             onShowClearCacheDialog = onShowClearCacheDialog,
                             onShowForceRescrapeDialog = onShowForceRescrapeDialog,
                             onShowTmdbApiDialog = onShowTmdbApiDialog,
+                            onShowClearTmdbApiDialog = onShowClearTmdbApiDialog,
                             hasCustomTmdbKey = hasCustomTmdbKey,
                             currentApiKey = currentApiKey
                         )
@@ -725,6 +746,7 @@ private fun HomeSettingsSection(
     onShowClearCacheDialog: () -> Unit,
     onShowForceRescrapeDialog: () -> Unit,
     onShowTmdbApiDialog: () -> Unit,
+    onShowClearTmdbApiDialog: () -> Unit,
     hasCustomTmdbKey: Boolean = false,
     currentApiKey: String = ""
 ) {
@@ -796,6 +818,19 @@ private fun HomeSettingsSection(
             title = "清除缓存数据",
             subtitle = "清除所有媒体元数据缓存，保留服务器列表",
             onClick = onShowClearCacheDialog,
+            modifier = Modifier.fillMaxWidth()
+        )
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // 清除 TMDB API Key
+        SettingCard(
+            icon = Icons.Default.CloudUpload,
+            iconBackgroundColor = Color.White.copy(alpha = 0.4f),
+            iconTint = Color(0xFFef4444),
+            title = "清除 TMDB API Key",
+            subtitle = if (isCustomKey) "清除已配置的自定义 API Key" else "暂无自定义 API Key 数据",
+            onClick = onShowClearTmdbApiDialog,
             modifier = Modifier.fillMaxWidth()
         )
     }
@@ -1460,6 +1495,141 @@ private fun ConfirmDialog(
     }
     
     // 对话框显示时，默认将焦点给"取消"按钮（安全操作），避免误触"确定"
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+}
+
+/**
+ * 清除 TMDB API Key 对话框
+ * 有数据时显示确认和取消按钮，无数据时只显示提示和取消按钮
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun ClearTmdbApiDialog(
+    hasCustomKey: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .clickable(
+                onClick = { },
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(
+                containerColor = SurfaceDark,
+                focusedContainerColor = SurfaceDark
+            ),
+            modifier = Modifier
+                .width(600.dp)
+                .padding(32.dp)
+                .focusProperties {
+                    canFocus = true
+                }
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp)
+            ) {
+                Text(
+                    text = "清除 TMDB API Key",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text(
+                    text = if (hasCustomKey) {
+                        "确定要清除已配置的自定义 TMDB API Key 吗？\n清除后将使用默认 API Key。"
+                    } else {
+                        "暂无自定义 TMDB API Key 数据"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 取消按钮
+                    var cancelButtonFocused by remember { mutableStateOf(false) }
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = BackgroundDark
+                        ),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
+                        modifier = Modifier
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { cancelButtonFocused = it.isFocused }
+                            .focusProperties {
+                                left = FocusRequester.Cancel
+                                up = FocusRequester.Cancel
+                            }
+                    ) {
+                        Text(
+                            text = "取消",
+                            color = if (cancelButtonFocused) BackgroundDark else TextMuted
+                        )
+                    }
+                    
+                    // 有数据时才显示确定按钮
+                    if (hasCustomKey) {
+                        Spacer(modifier = Modifier.width(16.dp))
+                        
+                        var confirmButtonFocused by remember { mutableStateOf(false) }
+                        Button(
+                            onClick = onConfirm,
+                            colors = ButtonDefaults.colors(
+                                containerColor = Color.Transparent,
+                                contentColor = TextMuted,
+                                focusedContainerColor = PrimaryYellow,
+                                focusedContentColor = BackgroundDark
+                            ),
+                            shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
+                            modifier = Modifier
+                                .onFocusChanged { confirmButtonFocused = it.isFocused }
+                                .focusProperties {
+                                    up = FocusRequester.Cancel
+                                }
+                        ) {
+                            Text(
+                                text = "确定",
+                                color = if (confirmButtonFocused) BackgroundDark else TextMuted
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 对话框显示时聚焦到取消按钮
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
