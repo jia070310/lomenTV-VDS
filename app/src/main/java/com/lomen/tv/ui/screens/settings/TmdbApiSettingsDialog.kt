@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -57,6 +58,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.delay
 import com.lomen.tv.data.preferences.TmdbApiPreferences
 import com.lomen.tv.ui.theme.BackgroundDark
 import com.lomen.tv.ui.theme.PrimaryYellow
@@ -87,7 +89,7 @@ fun TmdbApiSettingsDialog(
         generateQRCode(serverUrl, 400)
     }
     
-    // 焦点管理
+    // 焦点管理 - 创建外部容器的焦点请求器
     val closeButtonFocus = remember { FocusRequester() }
     
     // 启动服务器
@@ -139,20 +141,23 @@ fun TmdbApiSettingsDialog(
                     .width(320.dp)  // 缩小宽度
                     .height(365.dp)  // 缩小高度
                     .onPreviewKeyEvent { keyEvent ->
-                        // 拦截所有方向键，防止光标移出窗口
-                        if (keyEvent.key == Key.DirectionUp ||
-                            keyEvent.key == Key.DirectionDown ||
-                            keyEvent.key == Key.DirectionLeft ||
-                            keyEvent.key == Key.DirectionRight
-                        ) {
-                            true
-                        } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
-                            // 按返回键关闭窗口
-                            tmdbApiViewModel.stopConfigServer()
-                            onDismiss()
-                            true
-                        } else {
-                            false
+                        // 拦截所有按键事件，防止光标移出窗口
+                        when (keyEvent.key) {
+                            Key.DirectionUp,
+                            Key.DirectionDown,
+                            Key.DirectionLeft,
+                            Key.DirectionRight -> {
+                                true
+                            }
+                            Key.Back -> {
+                                if (keyEvent.type == KeyEventType.KeyUp) {
+                                    // 按返回键关闭窗口
+                                    tmdbApiViewModel.stopConfigServer()
+                                    onDismiss()
+                                }
+                                true
+                            }
+                            else -> false
                         }
                     }
             ) {
@@ -259,8 +264,9 @@ fun TmdbApiSettingsDialog(
         }
     }
 
-    // 自动聚焦到关闭按钮
+    // 自动聚焦到关闭按钮 - 延迟执行确保对话框已完全显示
     LaunchedEffect(Unit) {
+        delay(100) // 短暂延迟确保布局完成
         closeButtonFocus.requestFocus()
     }
 }

@@ -4,6 +4,7 @@ import com.lomen.tv.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -1543,10 +1544,14 @@ private fun ClearTmdbApiDialog(
                 .padding(32.dp)
                 .focusProperties {
                     canFocus = true
+                    // 焦点陷阱：防止焦点从该对话框“跑出去”
+                    exit = { FocusRequester.Cancel }
                 }
         ) {
             Column(
-                modifier = Modifier.padding(32.dp)
+                modifier = Modifier
+                    .padding(32.dp)
+                    .focusGroup()
             ) {
                 Text(
                     text = "清除 TMDB API Key",
