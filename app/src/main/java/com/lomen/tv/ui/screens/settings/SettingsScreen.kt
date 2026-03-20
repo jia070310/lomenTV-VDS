@@ -1856,19 +1856,17 @@ private fun LiveSettingsSection() {
                 onWebDavConfig = { /* 在直播设置页面不处理 WebDAV 配置 */ },
                 onLiveConfig = { config ->
                     scope.launch {
+                        // 推送的数据只添加到历史记录，不自动选中
                         if (config.liveSourceUrl.isNotBlank()) {
-                            liveSettingsPreferences.setLiveSourceUrl(config.liveSourceUrl)
                             liveSettingsPreferences.addLiveSourceToHistory(
                                 config.liveSourceName.takeIf { it.isNotBlank() } ?: "自定义源",
                                 config.liveSourceUrl
                             )
                         }
                         if (config.epgUrl.isNotBlank()) {
-                            liveSettingsPreferences.setEpgUrl(config.epgUrl)
                             liveSettingsPreferences.addEpgUrlToHistory(config.epgUrl)
                         }
                         if (config.userAgent.isNotBlank()) {
-                            liveSettingsPreferences.setUserAgent(config.userAgent)
                             liveSettingsPreferences.addUserAgentToHistory(config.userAgent)
                         }
                     }
