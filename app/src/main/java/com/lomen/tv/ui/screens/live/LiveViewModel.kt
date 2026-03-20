@@ -186,6 +186,9 @@ class LiveViewModel @Inject constructor(
             onRetry = { channel, urlIdx ->
                 // 重试当前URL：重新触发播放
                 android.util.Log.d("LiveViewModel", "重试播放: ${channel.name}, URL索引: $urlIdx")
+                // 先重置为-1再设置回目标值，强制触发重新播放
+                _currentChannelUrlIdx.value = -1
+                kotlinx.coroutines.delay(100)
                 _currentChannel.value = channel
                 _currentChannelUrlIdx.value = urlIdx
             },

@@ -18,7 +18,7 @@ import com.lomen.tv.data.model.live.LiveChannel
  */
 class LivePlayerErrorHandler(
     private val coroutineScope: CoroutineScope,
-    private val onRetry: (channel: LiveChannel, urlIdx: Int) -> Unit,
+    private val onRetry: suspend (channel: LiveChannel, urlIdx: Int) -> Unit,
     private val onSwitchUrl: (channel: LiveChannel, nextUrlIdx: Int) -> Unit,
     private val onSwitchChannel: (nextChannel: LiveChannel) -> Unit,
     private val onSourceSwitchRequired: (() -> Unit)? = null,
