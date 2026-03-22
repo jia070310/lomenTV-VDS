@@ -138,7 +138,7 @@ fun HomeScreen(
     versionUpdateViewModel: VersionUpdateViewModel = hiltViewModel()
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val navigationFocusRequester = remember { FocusRequester() }
+    val bottomBarFirstTabFocusRequester = remember { FocusRequester() }
     val contentFocusRequester = remember { FocusRequester() }
     var focusedColumnIndex by remember { mutableIntStateOf(0) } // 0/1/2 对应第一/二/三列
 
@@ -342,6 +342,11 @@ fun HomeScreen(
     }
     val headerFocusRequesters = remember { List(3) { FocusRequester() } }
 
+    LaunchedEffect(Unit) {
+        delay(100)
+        headerFocusRequesters[0].tryRequestFocus()
+    }
+
     // 获取同步状态
     val syncState by mediaSyncViewModel.syncState.collectAsState()
     val syncProgress by mediaSyncViewModel.syncProgress.collectAsState()
@@ -413,7 +418,7 @@ fun HomeScreen(
             .background(BackgroundDark)
             .onKeyEvent { keyEvent ->
                 if (keyEvent.key == Key.Menu && keyEvent.type == KeyEventType.KeyUp) {
-                    navigationFocusRequester.tryRequestFocus()
+                    bottomBarFirstTabFocusRequester.tryRequestFocus()
                     true
                 } else {
                     false
@@ -469,6 +474,7 @@ fun HomeScreen(
                     firstRowFocusRequesters = rowFocusRequesters.firstOrNull(),
                     headerFocusRequesters = headerFocusRequesters,
                     fallbackContentFocusRequester = contentFocusRequester,
+                    bottomNavigationFirstTabFocusRequester = bottomBarFirstTabFocusRequester,
                     onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                 )
             }
@@ -738,9 +744,8 @@ fun HomeScreen(
                 )
             },
             hasUpdate = hasUpdate,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .focusRequester(navigationFocusRequester)
+            firstTabFocusRequester = bottomBarFirstTabFocusRequester,
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
 
         // TMDB API 必需提示对话框
@@ -824,8 +829,10 @@ private fun HomeHeader(
     firstRowFocusRequesters: List<FocusRequester>? = null,
     headerFocusRequesters: List<FocusRequester>,
     fallbackContentFocusRequester: FocusRequester,
+    bottomNavigationFirstTabFocusRequester: FocusRequester,
     onFocusedColumnChanged: (Int) -> Unit
 ) {
+    val hasContentRowBelow = !firstRowFocusRequesters.isNullOrEmpty()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -898,13 +905,19 @@ private fun HomeHeader(
                     .focusRequester(headerFocusRequesters[0])
                     .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(0) }
                     .onPreviewKeyEvent { keyEvent ->
-                        if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
-                            requestFirstAvailableFocus(
-                                firstRowFocusRequesters?.getOrNull(0),
-                                fallbackContentFocusRequester
-                            )
-                        } else {
-                            false
+                        when {
+                            keyEvent.key == Key.DirectionLeft && keyEvent.type == KeyEventType.KeyDown -> true
+                            keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown -> {
+                                if (hasContentRowBelow) {
+                                    requestFirstAvailableFocus(
+                                        firstRowFocusRequesters?.getOrNull(0),
+                                        fallbackContentFocusRequester
+                                    )
+                                } else {
+                                    bottomNavigationFirstTabFocusRequester.tryRequestFocus()
+                                }
+                            }
+                            else -> false
                         }
                     }
             ) {
@@ -931,10 +944,14 @@ private fun HomeHeader(
                     .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(1) }
                     .onPreviewKeyEvent { keyEvent ->
                         if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
-                            requestFirstAvailableFocus(
-                                firstRowFocusRequesters?.getOrNull(0),
-                                fallbackContentFocusRequester
-                            )
+                            if (hasContentRowBelow) {
+                                requestFirstAvailableFocus(
+                                    firstRowFocusRequesters?.getOrNull(0),
+                                    fallbackContentFocusRequester
+                                )
+                            } else {
+                                bottomNavigationFirstTabFocusRequester.tryRequestFocus()
+                            }
                         } else {
                             false
                         }
@@ -963,10 +980,14 @@ private fun HomeHeader(
                     .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(2) }
                     .onPreviewKeyEvent { keyEvent ->
                         if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
-                            requestFirstAvailableFocus(
-                                firstRowFocusRequesters?.getOrNull(0),
-                                fallbackContentFocusRequester
-                            )
+                            if (hasContentRowBelow) {
+                                requestFirstAvailableFocus(
+                                    firstRowFocusRequesters?.getOrNull(0),
+                                    fallbackContentFocusRequester
+                                )
+                            } else {
+                                bottomNavigationFirstTabFocusRequester.tryRequestFocus()
+                            }
                         } else {
                             false
                         }
@@ -1629,6 +1650,7 @@ private fun BottomNavigationBar(
     onTabSelected: (Int) -> Unit,
     onExitNavigation: () -> Unit,
     hasUpdate: Boolean,
+    firstTabFocusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
     val items = listOf(
@@ -1669,6 +1691,10 @@ private fun BottomNavigationBar(
                                 focusedContentColor = BackgroundDark
                             ),
                             modifier = Modifier
+                                .then(
+                                    if (index == 0) Modifier.focusRequester(firstTabFocusRequester)
+                                    else Modifier
+                                )
                                 .onPreviewKeyEvent { keyEvent ->
                                     if (keyEvent.key == Key.DirectionUp && keyEvent.type == KeyEventType.KeyDown) {
                                         onExitNavigation()

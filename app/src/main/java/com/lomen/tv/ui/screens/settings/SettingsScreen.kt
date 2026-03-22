@@ -118,6 +118,7 @@ fun SettingsScreen(
 ) {
     var selectedCategory by remember { mutableIntStateOf(0) }
     var showWebDavDialog by remember { mutableStateOf(false) }
+    var showWebDavPostAddHint by remember { mutableStateOf(false) }
     var showEditWebDavDialog by remember { mutableStateOf(libraryToEdit != null) }
     
     // 焦点管理
@@ -216,7 +217,14 @@ fun SettingsScreen(
                     )
                     sharedResourceLibraryViewModel.addLibrary(newLibrary)
                     showWebDavDialog = false
+                    showWebDavPostAddHint = true
                 }
+            )
+        }
+
+        if (showWebDavPostAddHint) {
+            WebDavServerAddedHintDialog(
+                onDismiss = { showWebDavPostAddHint = false }
             )
         }
 
@@ -2264,6 +2272,8 @@ private fun LiveSettingsSection() {
     var showEpgHistory by remember { mutableStateOf(false) }
     var showUaHistory by remember { mutableStateOf(false) }
     var showWebConfigQr by remember { mutableStateOf(false) }
+    var showLiveWebConfigSuccessHint by remember { mutableStateOf(false) }
+    var pendingLiveWebPushKind by remember { mutableStateOf(LiveWebPushSuccessKind.MIXED) }
     
     // 收集当前设置值
     val liveSourceUrl by liveSettingsPreferences.liveSourceUrl.collectAsState(initial = "")
@@ -2286,12 +2296,12 @@ private fun LiveSettingsSection() {
     // 启动 WebDav 配置服务器用于直播设置
     val webDavServer = remember { WebDavConfigServer.getInstance(context, 8893) }
     DisposableEffect(showWebConfigQr) {
-        if (showWebConfigQr) {
+        val open = showWebConfigQr
+        if (open) {
             webDavServer.startServerWithLiveConfig(
                 onWebDavConfig = { /* 在直播设置页面不处理 WebDAV 配置 */ },
                 onLiveConfig = { config ->
                     scope.launch {
-                        // 推送的数据只添加到历史记录，不自动选中
                         if (config.liveSourceUrl.isNotBlank()) {
                             liveSettingsPreferences.addLiveSourceToHistory(
                                 config.liveSourceName.takeIf { it.isNotBlank() } ?: "自定义源",
@@ -2304,12 +2314,14 @@ private fun LiveSettingsSection() {
                         if (config.userAgent.isNotBlank()) {
                             liveSettingsPreferences.addUserAgentToHistory(config.userAgent)
                         }
+                        showWebConfigQr = false
+                        showLiveWebConfigSuccessHint = true
                     }
                 }
             )
         }
         onDispose {
-            if (showWebConfigQr) {
+            if (open) {
                 webDavServer.stopServer()
             }
         }
@@ -2520,6 +2532,7 @@ private fun LiveSettingsSection() {
         title = "历史直播源",
         showDialogProvider = { showLiveSourceHistory },
         onDismissRequest = { showLiveSourceHistory = false },
+        blockDismissForOverlay = showWebConfigQr || showLiveWebConfigSuccessHint,
         items = liveSourceHistory.toList(),
         currentItem = currentLiveSourceItem,
         onSelected = { item ->
@@ -2535,7 +2548,7 @@ private fun LiveSettingsSection() {
             scope.launch { liveSettingsPreferences.removeLiveSourceFromHistory(url) }
         },
         onAddNew = {
-            showLiveSourceHistory = false
+            pendingLiveWebPushKind = LiveWebPushSuccessKind.LIVE_SOURCE
             showWebConfigQr = true
         },
         itemContent = { item, isSelected, isFocused ->
@@ -2553,6 +2566,7 @@ private fun LiveSettingsSection() {
         title = "历史节目单",
         showDialogProvider = { showEpgHistory },
         onDismissRequest = { showEpgHistory = false },
+        blockDismissForOverlay = showWebConfigQr || showLiveWebConfigSuccessHint,
         items = epgUrlHistory.toList(),
         currentItem = epgUrl.takeIf { it.isNotBlank() },
         onSelected = { url ->
@@ -2566,7 +2580,7 @@ private fun LiveSettingsSection() {
             scope.launch { liveSettingsPreferences.removeEpgUrlFromHistory(url) }
         },
         onAddNew = {
-            showEpgHistory = false
+            pendingLiveWebPushKind = LiveWebPushSuccessKind.PROGRAM_GUIDE
             showWebConfigQr = true
         },
         itemContent = { item, isSelected, isFocused ->
@@ -2586,6 +2600,7 @@ private fun LiveSettingsSection() {
         title = "历史 User-Agent",
         showDialogProvider = { showUaHistory },
         onDismissRequest = { showUaHistory = false },
+        blockDismissForOverlay = showWebConfigQr || showLiveWebConfigSuccessHint,
         items = userAgentHistory.toList(),
         currentItem = userAgent.takeIf { it.isNotBlank() },
         onSelected = { ua ->
@@ -2599,7 +2614,7 @@ private fun LiveSettingsSection() {
             scope.launch { liveSettingsPreferences.removeUserAgentFromHistory(ua) }
         },
         onAddNew = {
-            showUaHistory = false
+            pendingLiveWebPushKind = LiveWebPushSuccessKind.USER_AGENT
             showWebConfigQr = true
         },
         itemContent = { item, isSelected, isFocused ->
@@ -2622,6 +2637,13 @@ private fun LiveSettingsSection() {
         showDialogProvider = { showWebConfigQr },
         onDismissRequest = { showWebConfigQr = false }
     )
+
+    if (showLiveWebConfigSuccessHint) {
+        LiveWebConfigSuccessHintDialog(
+            onDismiss = { showLiveWebConfigSuccessHint = false },
+            kind = pendingLiveWebPushKind
+        )
+    }
 }
 
 /**

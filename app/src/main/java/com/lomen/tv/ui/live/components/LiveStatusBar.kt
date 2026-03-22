@@ -34,7 +34,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -65,6 +67,7 @@ import androidx.tv.material3.Surface
 import com.lomen.tv.data.model.live.CurrentProgramme
 import com.lomen.tv.data.model.live.LiveChannel
 import com.lomen.tv.ui.live.utils.handleLiveKeyEvents
+import com.lomen.tv.ui.screens.settings.LiveWebConfigSuccessHintDialog
 import com.lomen.tv.ui.screens.settings.QrCodeDialog
 import com.lomen.tv.ui.theme.LomenTVTheme
 import com.lomen.tv.ui.theme.PrimaryYellow
@@ -98,10 +101,12 @@ fun LiveStatusBar(
 ) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
-    
+    val coroutineScope = rememberCoroutineScope()
+
     // 对话框状态
     var showSourceDialog by remember { mutableStateOf(false) }
     var showQrcodeDialog by remember { mutableStateOf(false) }
+    var showLiveConfigSuccessHint by remember { mutableStateOf(false) }
     var showToast by remember { mutableStateOf(false) }
     var toastMessage by remember { mutableStateOf("") }
     
@@ -113,8 +118,8 @@ fun LiveStatusBar(
     }
     
     // 自动关闭逻辑：5秒无操作后关闭
-    LaunchedEffect(lastInteractionTime, showSourceDialog, showQrcodeDialog) {
-        if (!showSourceDialog && !showQrcodeDialog) {
+    LaunchedEffect(lastInteractionTime, showSourceDialog, showQrcodeDialog, showLiveConfigSuccessHint) {
+        if (!showSourceDialog && !showQrcodeDialog && !showLiveConfigSuccessHint) {
             delay(5000) // 5秒延迟
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastInteractionTime >= 5000) {
@@ -230,11 +235,11 @@ fun LiveStatusBar(
         val liveSettingsPreferences = remember { LiveSettingsPreferences(context) }
         
         DisposableEffect(showQrcodeDialog) {
-            if (showQrcodeDialog) {
+            val open = showQrcodeDialog
+            if (open) {
                 webDavServer.startServerWithLiveConfig(
                     onWebDavConfig = { /* 不处理 WebDAV 配置 */ },
                     onLiveConfig = { config ->
-                        // 保存接收到的配置
                         kotlinx.coroutines.runBlocking {
                             if (config.liveSourceUrl.isNotBlank()) {
                                 liveSettingsPreferences.addLiveSourceToHistory(
@@ -249,14 +254,26 @@ fun LiveStatusBar(
                                 liveSettingsPreferences.addUserAgentToHistory(config.userAgent)
                             }
                         }
+                        coroutineScope.launch(Dispatchers.Main.immediate) {
+                            showQrcodeDialog = false
+                            showLiveConfigSuccessHint = true
+                        }
                     }
                 )
             }
             onDispose {
-                webDavServer.stopServer()
+                if (open) {
+                    webDavServer.stopServer()
+                }
             }
         }
-        
+
+        if (showLiveConfigSuccessHint) {
+            LiveWebConfigSuccessHintDialog(
+                onDismiss = { showLiveConfigSuccessHint = false }
+            )
+        }
+
         QrCodeDialog(
             text = serverUrl,
             title = "网页配置",

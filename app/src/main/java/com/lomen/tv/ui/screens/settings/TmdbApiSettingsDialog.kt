@@ -27,6 +27,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.focusable
@@ -59,6 +60,7 @@ import androidx.tv.material3.Text
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.lomen.tv.data.preferences.TmdbApiPreferences
 import com.lomen.tv.ui.theme.BackgroundDark
 import com.lomen.tv.ui.theme.PrimaryYellow
@@ -91,13 +93,19 @@ fun TmdbApiSettingsDialog(
     
     // 焦点管理 - 创建外部容器的焦点请求器
     val closeButtonFocus = remember { FocusRequester() }
-    
+    val scope = rememberCoroutineScope()
+
     // 启动服务器
     LaunchedEffect(Unit) {
         android.util.Log.d("TmdbApiSettingsDialog", "Starting config server...")
         tmdbApiViewModel.startConfigServer {
             android.util.Log.d("TmdbApiSettingsDialog", "Config received, showing toast")
             Toast.makeText(context, "TMDB API 配置已更新", Toast.LENGTH_SHORT).show()
+            // 提示显示片刻后停止服务，由下方 LaunchedEffect(isServerRunning) 触发关闭二维码窗口
+            scope.launch {
+                delay(2_000) // 与 Toast.LENGTH_SHORT 展示时间相当后再关窗
+                tmdbApiViewModel.stopConfigServer()
+            }
         }
         android.util.Log.d("TmdbApiSettingsDialog", "Config server started")
     }

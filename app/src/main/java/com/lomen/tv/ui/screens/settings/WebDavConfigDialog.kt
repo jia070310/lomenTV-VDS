@@ -69,6 +69,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -1382,6 +1385,124 @@ private suspend fun testAListConnection(config: WebDavConfigServer.WebDavConfig)
             isSuccess = false,
             errorMessage = "AList 连接失败：${e.message ?: e.javaClass.simpleName}"
         )
+    }
+}
+
+/**
+ * 网页推送 WebDAV 成功、二维码窗口关闭后的下一步操作说明。
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun WebDavServerAddedHintDialog(
+    onDismiss: () -> Unit
+) {
+    val closeFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
+        closeFocusRequester.requestFocus()
+    }
+
+    Popup(
+        alignment = Alignment.Center,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(
+            focusable = true,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(
+                containerColor = SurfaceDark,
+                focusedContainerColor = SurfaceDark
+            ),
+            modifier = Modifier
+                .widthIn(min = 260.dp, max = 400.dp)
+                .padding(12.dp)
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.key in listOf(
+                            Key.DirectionUp, Key.DirectionDown,
+                            Key.DirectionLeft, Key.DirectionRight
+                        )
+                    ) {
+                        true
+                    } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                        onDismiss()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .focusProperties {
+                    canFocus = true
+                }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF10b981).copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Color(0xFF10b981),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "服务器添加完成",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = TextPrimary,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "请回到首页，在下方状态栏打开「资源库」，在资源列表里选择您需要的服务器；选择后将自动开启扫描与刮削，请耐心等待完成。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.colors(
+                        containerColor = SurfaceDark,
+                        contentColor = Color.Black,
+                        focusedContainerColor = PrimaryYellow,
+                        focusedContentColor = Color.Black,
+                        pressedContainerColor = PrimaryYellow,
+                        pressedContentColor = Color.Black
+                    ),
+                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                    modifier = Modifier.focusRequester(closeFocusRequester)
+                ) {
+                    Text(
+                        text = "我知道了",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.Black,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

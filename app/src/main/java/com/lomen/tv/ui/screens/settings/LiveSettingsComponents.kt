@@ -24,8 +24,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
@@ -34,8 +37,12 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import android.app.Dialog as AndroidDialog
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -60,9 +68,11 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.tv.foundation.lazy.list.TvLazyListState
@@ -286,6 +296,165 @@ fun QrCodeDialog(
 }
 
 /**
+ * 网页推送成功提示文案：按用户从哪一类列表进入「添加」区分。
+ * [MIXED] 用于直播页状态栏等可同时配置多项的入口。
+ */
+enum class LiveWebPushSuccessKind {
+    LIVE_SOURCE,
+    PROGRAM_GUIDE,
+    USER_AGENT,
+    MIXED
+}
+
+private fun LiveWebPushSuccessKind.successMessage(): String = when (this) {
+    LiveWebPushSuccessKind.LIVE_SOURCE ->
+        "添加直播源已成功，请选择您需要的资源。"
+    LiveWebPushSuccessKind.PROGRAM_GUIDE ->
+        "添加节目表已成功，请选择您需要的资源。"
+    LiveWebPushSuccessKind.USER_AGENT ->
+        "添加 User-Agent（UA）已成功，请选择您需要的资源。"
+    LiveWebPushSuccessKind.MIXED ->
+        "直播源、节目表与 UA 已添加成功。请在对应列表中选择您需要的资源。"
+}
+
+/**
+ * 网页推送直播源 / 节目表 / UA 成功后，关闭二维码后的说明弹窗。
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun LiveWebConfigSuccessHintDialog(
+    onDismiss: () -> Unit,
+    kind: LiveWebPushSuccessKind = LiveWebPushSuccessKind.MIXED
+) {
+    val closeFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        closeFocusRequester.requestFocus()
+    }
+
+    // 必须使用 Dialog 而非 Popup：历史列表是 Material AlertDialog（独立窗口），
+    // Popup 画在主窗口上会被挡在下面，导致「先关列表才看到提示」的顺序错误。
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        val view = LocalView.current
+        SideEffect {
+            var ctx: Context? = view.context
+            while (ctx is ContextWrapper) {
+                if (ctx is AndroidDialog) {
+                    ctx.window?.setDimAmount(0f)
+                    break
+                }
+                ctx = ctx.baseContext
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (keyEvent.key == Key.DirectionUp ||
+                        keyEvent.key == Key.DirectionDown ||
+                        keyEvent.key == Key.DirectionLeft ||
+                        keyEvent.key == Key.DirectionRight
+                    ) {
+                        true
+                    } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                        onDismiss()
+                        true
+                    } else {
+                        false
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                onClick = {},
+                colors = CardDefaults.colors(
+                    containerColor = SurfaceDark,
+                    focusedContainerColor = SurfaceDark
+                ),
+                modifier = Modifier
+                    .widthIn(min = 260.dp, max = 400.dp)
+                    .padding(12.dp)
+                    .focusProperties {
+                        canFocus = true
+                    }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF10b981).copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color(0xFF10b981),
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "添加成功",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = TextPrimary,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = kind.successMessage(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = SurfaceDark,
+                            contentColor = Color.Black,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = Color.Black,
+                            pressedContainerColor = PrimaryYellow,
+                            pressedContentColor = Color.Black
+                        ),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        modifier = Modifier.focusRequester(closeFocusRequester)
+                    ) {
+                        Text(
+                            text = "我知道了",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Black,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * 历史列表弹窗
  */
 @OptIn(ExperimentalTvMaterial3Api::class, androidx.tv.material3.ExperimentalTvMaterial3Api::class)
@@ -295,6 +464,8 @@ fun <T> HistoryListDialog(
     title: String,
     showDialogProvider: () -> Boolean = { false },
     onDismissRequest: () -> Unit = {},
+    /** 为 true 时（例如上层叠了二维码弹窗）禁止返回键关闭本列表，避免误关底层窗口 */
+    blockDismissForOverlay: Boolean = false,
     items: List<T>,
     currentItem: T?,
     onSelected: (T) -> Unit,
@@ -313,7 +484,7 @@ fun <T> HistoryListDialog(
     var showBuiltInTip by remember { mutableStateOf(false) }
     
     // 当子弹窗显示时，不响应 dismiss
-    val isSubDialogShowing = showDeleteConfirm || showBuiltInTip
+    val isSubDialogShowing = showDeleteConfirm || showBuiltInTip || blockDismissForOverlay
 
     if (showDialogProvider()) {
         AlertDialog(
