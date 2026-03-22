@@ -116,6 +116,17 @@ class TmdbScraper private constructor() {
         })
         .build()
 
+    /**
+     * 仅当标题中的4位数字看起来像“附加年份”时，才允许移除后重搜。
+     * 例如：
+     * - "Inception 2010" / "盗梦空间(2010)" -> true
+     * - "你好1983"（数字是正式片名一部分）-> false
+     */
+    private fun shouldStripYearFromTitle(title: String, year: Int?): Boolean {
+        if (year != null) return true
+        return Regex("""(?:^|[.\s_\-()])((?:19|20)\d{2})(?:$|[.\s_\-()])""").containsMatchIn(title)
+    }
+
     suspend fun searchMovie(title: String, year: Int? = null): ScrapeResult? = withContext(Dispatchers.IO) {
         try {
             // 渐进式搜索策略
@@ -131,9 +142,9 @@ class TmdbScraper private constructor() {
             val result2 = searchMovieInternal(title, null)
             if (result2 != null) return@withContext result2
             
-            // 3. 移除标题中的年份数字，再次搜索
+            // 3. 仅在“疑似年份后缀”场景才移除4位年份重试，避免误删正式片名中的数字
             val titleWithoutYear = title.replace(Regex("\\d{4}"), "").replace(Regex("\\s+"), " ").trim()
-            if (titleWithoutYear != title && titleWithoutYear.isNotEmpty()) {
+            if (shouldStripYearFromTitle(title, year) && titleWithoutYear != title && titleWithoutYear.isNotEmpty()) {
                 Log.d(TAG, "Search with cleaned title: $titleWithoutYear")
                 val result3 = searchMovieInternal(titleWithoutYear, null)
                 if (result3 != null) return@withContext result3
@@ -202,9 +213,9 @@ class TmdbScraper private constructor() {
             val result2 = searchMultiInternal(title, null)
             if (result2.first != null) return@withContext result2
             
-            // 3. 移除标题中的年份数字，再次搜索
+            // 3. 仅在“疑似年份后缀”场景才移除4位年份重试，避免误删正式片名中的数字
             val titleWithoutYear = title.replace(Regex("\\d{4}"), "").replace(Regex("\\s+"), " ").trim()
-            if (titleWithoutYear != title && titleWithoutYear.isNotEmpty()) {
+            if (shouldStripYearFromTitle(title, year) && titleWithoutYear != title && titleWithoutYear.isNotEmpty()) {
                 Log.d(TAG, "Multi search with cleaned title: $titleWithoutYear")
                 val result3 = searchMultiInternal(titleWithoutYear, null)
                 if (result3.first != null) return@withContext result3
@@ -331,9 +342,9 @@ class TmdbScraper private constructor() {
             val result2 = searchTvInternal(title, null)
             if (result2 != null) return@withContext result2
             
-            // 3. 移除标题中的年份数字，再次搜索
+            // 3. 仅在“疑似年份后缀”场景才移除4位年份重试，避免误删正式片名中的数字
             val titleWithoutYear = title.replace(Regex("\\d{4}"), "").replace(Regex("\\s+"), " ").trim()
-            if (titleWithoutYear != title && titleWithoutYear.isNotEmpty()) {
+            if (shouldStripYearFromTitle(title, year) && titleWithoutYear != title && titleWithoutYear.isNotEmpty()) {
                 Log.d(TAG, "TV search with cleaned title: $titleWithoutYear")
                 val result3 = searchTvInternal(titleWithoutYear, null)
                 if (result3 != null) return@withContext result3

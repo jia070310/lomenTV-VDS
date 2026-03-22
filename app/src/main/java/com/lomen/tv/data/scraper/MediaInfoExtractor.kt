@@ -1,6 +1,8 @@
 package com.lomen.tv.data.scraper
 
 import android.util.Log
+import com.lomen.tv.data.preferences.MediaClassificationStrategyHolder
+import com.lomen.tv.domain.model.MediaClassificationStrategy
 import com.lomen.tv.domain.model.MediaType
 
 /**
@@ -36,7 +38,7 @@ data class MediaInfo(
  * 
  * 【规则3】纯集数格式（父文件夹为剧名）
  *   - 父文件夹：淬火年代
- *   - 文件名：01.mp4 / 01-4k.mp4 / 01高清.mp4 / 01xx.mp4 / 01-4k.高码率.mp4
+ *   - 文件名：01.mp4 / 01-4k.mp4 / 01高清.mp4 / 01xx.mp4 / 01-4k.高码率.mp4 / 01 4K.国&粤.mp4
  * 
  * 【规则4】SxxExx在文件名（父文件夹为剧名）
  *   - 父文件夹：淬火年代
@@ -47,6 +49,15 @@ data class MediaInfo(
  */
 object MediaInfoExtractor {
     private const val TAG = "MediaInfoExtractor"
+
+    // 仅匹配“独立年份标记”（前后有分隔符或括号），避免误删标题内数字（如：你好1983）
+    private val STANDALONE_YEAR_REGEX = Regex(
+        """(^|[.\s_\-\(\[【])((?:19|20)\d{2})($|[.\s_\-\)\]】])"""
+    )
+
+    /** 日期分期综艺：如 2024-01-15、2024.12.31 */
+    private val DATE_EPISODE_REGEX =
+        Regex("""(20\d{2})[-_. ](0[1-9]|1[0-2])[-_. ](0[1-9]|[12]\d|3[01])""")
     
     // 视频文件扩展名
     private val VIDEO_EXTENSIONS = listOf(
@@ -87,21 +98,34 @@ object MediaInfoExtractor {
     
     // 综艺相关词汇
     private val VARIETY_KEYWORDS = listOf(
-        "综艺", "真人秀", "脱口秀", "variety", "show"
+        "综艺", "真人秀", "脱口秀", "选秀", "variety", "reality", "talk show", "season"
+    )
+
+    // 动漫相关词汇
+    private val ANIME_KEYWORDS = listOf(
+        "动漫", "动画", "番剧", "ova", "剧场版", "anime", "animation"
     )
     
     // 纪录片相关词汇
     private val DOCUMENTARY_KEYWORDS = listOf(
-        "纪录片", "documentary"
+        "纪录片", "纪实", "bbc", "discovery", "national geographic", "documentary", "docu"
     )
     
     /**
      * 主提取方法
+     *
+     * @param fullRelativePath 相对资源库根的路径（含文件名更佳），用于「按类型分目录」时从路径向上匹配类型文件夹名；
+     * 若为空则仅用 [parentFolder]/[filename] 做单层目录名匹配。
      */
-    fun extract(filename: String, parentFolder: String = ""): MediaInfo {
+    fun extract(
+        filename: String,
+        parentFolder: String = "",
+        fullRelativePath: String = ""
+    ): MediaInfo {
         Log.d(TAG, "========== 开始解析 ==========")
         Log.d(TAG, "文件名: $filename")
         Log.d(TAG, "父文件夹: $parentFolder")
+        Log.d(TAG, "相对路径: $fullRelativePath")
         
         // 1. 提取tmdbid（优先级最高）
         val tmdbId = extractTmdbId(filename) ?: extractTmdbId(parentFolder)
@@ -111,9 +135,9 @@ object MediaInfoExtractor {
         val nameWithoutExt = removeExtension(filename)
         val folderWithoutExt = removeExtension(parentFolder)
         
-        // 3. 提取季集信息
+        // 3. 提取季集信息（文件名）
         val episodeInfo = extractEpisodeInfo(nameWithoutExt)
-        Log.d(TAG, "季集信息: S${episodeInfo?.first ?: "?"}E${episodeInfo?.second ?: "?"}")
+        Log.d(TAG, "季集信息(文件): S${episodeInfo?.first ?: "?"}E${episodeInfo?.second ?: "?"}")
         
         // 4. 提取年份
         val yearFromFile = extractYear(nameWithoutExt)
@@ -121,21 +145,40 @@ object MediaInfoExtractor {
         val year = yearFromFile ?: yearFromFolder
         Log.d(TAG, "年份: $year (文件: $yearFromFile, 文件夹: $yearFromFolder)")
         
-        // 5. 判断文件名类型并提取标题
-        val (title, displayTitle) = extractTitle(nameWithoutExt, folderWithoutExt, episodeInfo)
+        // 5. 判断文件名类型并提取标题（文件夹名可解析「第X季」→ 搜索用剧名 + 季号）
+        val titleEx = extractTitle(nameWithoutExt, folderWithoutExt)
+        val title = titleEx.title
+        val displayTitle = titleEx.displayTitle
+        val seasonFromFolder = titleEx.seasonFromFolder
+        val mergedSeason = seasonFromFolder ?: episodeInfo?.first
+        val mergedEpisode = episodeInfo?.second
         Log.d(TAG, "标题: $title")
         Log.d(TAG, "显示标题: $displayTitle")
+        if (seasonFromFolder != null) {
+            Log.d(TAG, "文件夹解析季号: $seasonFromFolder，合并后 S${mergedSeason ?: "?"}")
+        }
         
-        // 6. 判断媒体类型
-        val mediaType = determineMediaType(title, filename, parentFolder, episodeInfo)
+        // 6. 判断媒体类型：优先「目录类型」分库（路径自下而上匹配类型根文件夹名），否则再按策略/关键词/结构
+        val pathForHint = when {
+            fullRelativePath.isNotBlank() -> fullRelativePath
+            parentFolder.isNotBlank() -> "$parentFolder/$filename"
+            else -> ""
+        }
+        val typeFromFolderHint =
+            if (pathForHint.isNotBlank()) LibraryFolderTypeHints.detectMediaTypeFromPath(pathForHint) else null
+        val mediaType = typeFromFolderHint
+            ?: determineMediaType(title, filename, parentFolder, episodeInfo)
+        if (typeFromFolderHint != null) {
+            Log.d(TAG, "目录类型命中: $typeFromFolderHint (路径: $pathForHint)")
+        }
         Log.d(TAG, "媒体类型: $mediaType")
         
         val result = MediaInfo(
             title = title,
             displayTitle = displayTitle,
             year = year,
-            season = episodeInfo?.first,
-            episode = episodeInfo?.second,
+            season = mergedSeason,
+            episode = mergedEpisode,
             type = mediaType,
             originalFilename = filename,
             tmdbId = tmdbId
@@ -146,11 +189,17 @@ object MediaInfoExtractor {
         return result
     }
     
+    private data class TitleExtract(
+        val title: String,
+        val displayTitle: String,
+        /** 从父文件夹名解析的季（如 圆桌派 第1季） */
+        val seasonFromFolder: Int? = null
+    )
+
     /**
-     * 提取标题
-     * 返回 Pair<搜索标题, 显示标题>
+     * 提取标题；若剧名在文件夹上且含「第X季」，会剥离季信息并返回 [TitleExtract.seasonFromFolder]。
      */
-    private fun extractTitle(filename: String, parentFolder: String, episodeInfo: Pair<Int, Int>?): Pair<String, String> {
+    private fun extractTitle(filename: String, parentFolder: String): TitleExtract {
         val cleanedFilename = cleanTechWords(filename)
         val cleanedFolder = cleanTechWords(parentFolder)
         
@@ -162,33 +211,36 @@ object MediaInfoExtractor {
             FileNameType.PURE_EPISODE_NUMBER -> {
                 // 纯集数格式：01.mp4, 01-4k.mp4, 01高清.mp4
                 // 使用父文件夹作为标题
-                val title = extractTitleFromFolder(cleanedFolder)
-                Pair(title, title)
+                val (t, season) = extractTitleAndSeasonFromFolder(cleanedFolder)
+                TitleExtract(t, t, season)
             }
             
             FileNameType.EPISODE_ONLY -> {
                 // 只有SxxExx没有剧名：S01E01.mp4
                 // 使用父文件夹作为标题
-                val title = extractTitleFromFolder(cleanedFolder)
-                Pair(title, title)
+                val (t, season) = extractTitleAndSeasonFromFolder(cleanedFolder)
+                TitleExtract(t, t, season)
             }
             
             FileNameType.FULL_INFO -> {
                 // 完整格式：淬火年代.2025.S01E01.mp4
                 // 从文件名提取标题
                 val title = extractTitleBeforeSeasonEpisode(cleanedFilename)
-                val displayTitle = if (title.isNotEmpty()) title else extractTitleFromFolder(cleanedFolder)
-                Pair(title.ifEmpty { extractTitleFromFolder(cleanedFolder) }, displayTitle.ifEmpty { title })
+                val (folderTitle, folderSeason) = extractTitleAndSeasonFromFolder(cleanedFolder)
+                val displayTitle = if (title.isNotEmpty()) title else folderTitle
+                val primary = title.ifEmpty { folderTitle }
+                TitleExtract(primary, displayTitle.ifEmpty { primary }, folderSeason.takeIf { title.isEmpty() })
             }
             
             FileNameType.MOVIE_OR_UNKNOWN -> {
                 // 电影或未知格式
+                val (folderTitle, folderSeason) = extractTitleAndSeasonFromFolder(cleanedFolder)
                 val title = if (cleanedFilename.length > 2 && !cleanedFilename.matches(Regex("^\\d+$"))) {
                     cleanedFilename
                 } else {
-                    extractTitleFromFolder(cleanedFolder)
+                    folderTitle
                 }
-                Pair(title, title)
+                TitleExtract(title, title, folderSeason.takeIf { title == folderTitle })
             }
         }
     }
@@ -199,8 +251,8 @@ object MediaInfoExtractor {
     private fun analyzeFileNameType(filename: String): FileNameType {
         val cleanName = removeExtension(filename)
         
-        // 检查是否是纯集数（01, 01-4k, 01高清, 01xx等）
-        if (cleanName.matches(Regex("^\\d{1,3}([\\-_.].*)?$"))) {
+        // 检查是否是纯集数（01, 01-4k, 01高清, 01xx, 01 4K.国&粤 等）
+        if (cleanName.matches(Regex("^\\d{1,3}([\\-_.\\s].*)?$"))) {
             return FileNameType.PURE_EPISODE_NUMBER
         }
         
@@ -223,22 +275,20 @@ object MediaInfoExtractor {
     }
     
     /**
-     * 从文件夹名提取标题
+     * 从文件夹名提取标题，并解析「第X季 / S02 / Season 1」为季号，从剧名中剥离。
      */
-    private fun extractTitleFromFolder(folder: String): String {
-        if (folder.isEmpty()) return ""
+    private fun extractTitleAndSeasonFromFolder(folder: String): Pair<String, Int?> {
+        if (folder.isEmpty()) return "" to null
         
         var title = folder
-        // 移除年份
-        title = title.replace(Regex("\\(?(19|20)\\d{2}\\)?"), " ")
-        // 移除tmdbid
+        title = removeStandaloneYear(title)
         title = title.replace(Regex("\\[tmdbid=\\d+\\]"), " ")
-        // 替换分隔符
+        val (withoutSeason, season) = FolderSeriesNameParser.stripSeasonMarkers(title)
+        title = withoutSeason
         title = title.replace(".", " ").replace("_", " ").replace("-", " ")
-        // 移除多余空格
         title = title.replace(Regex("\\s+"), " ").trim()
         
-        return title
+        return title to season
     }
     
     /**
@@ -258,7 +308,7 @@ object MediaInfoExtractor {
             if (match != null && match.range.first > 0) {
                 var title = filename.substring(0, match.range.first)
                 // 移除年份
-                title = title.replace(Regex("\\(?(19|20)\\d{2}\\)?"), " ")
+                title = removeStandaloneYear(title)
                 // 移除tmdbid
                 title = title.replace(Regex("\\[tmdbid=\\d+\\]"), " ")
                 // 替换分隔符
@@ -304,6 +354,11 @@ object MediaInfoExtractor {
             // 只有集数（默认第1季）
             Regex("[Ee][Pp]?(\\d{1,3})"),                              // E01, EP01
             Regex("第(\\d{1,3})集"),                                   // 第01集
+            // 前缀排序数字 + 技术标签（如: 01 4K.国&粤）
+            Regex(
+                "^(\\d{1,3})\\s+(?:2160p|1080p|720p|480p|4k|8k|hd|国语|粤语|国粤|国&粤|中字|中英|简中|繁中|x264|x265|h264|h265).*",
+                RegexOption.IGNORE_CASE
+            ),
             
             // 纯数字格式（在文件名开头或作为整体）
             Regex("^(\\d{1,3})[\\-_.]"),                               // 01-, 01_, 01.
@@ -337,9 +392,9 @@ object MediaInfoExtractor {
     private fun extractYear(text: String): Int? {
         // 优先匹配 .2025. 或 (2025) 格式
         val patterns = listOf(
-            Regex("[.\\s_-](19|20\\d{2})[.\\s_-]"),  // .2025.
-            Regex("\\((19|20\\d{2})\\)"),             // (2025)
-            Regex("(19|20\\d{2})")                    // 任意位置
+            Regex("[.\\s_-]((?:19|20)\\d{2})[.\\s_-]"),  // .2025.
+            Regex("\\(((?:19|20)\\d{2})\\)"),            // (2025)
+            Regex("((?:19|20)\\d{2})")                   // 任意位置
         )
         
         for (pattern in patterns) {
@@ -385,30 +440,88 @@ object MediaInfoExtractor {
         parentFolder: String,
         episodeInfo: Pair<Int, Int>?
     ): MediaType {
+        return when (MediaClassificationStrategyHolder.strategy) {
+            MediaClassificationStrategy.KEYWORD_FIRST ->
+                determineMediaTypeKeywordFirst(title, filename, parentFolder, episodeInfo)
+            MediaClassificationStrategy.STRUCTURE_FIRST ->
+                determineMediaTypeStructureFirst(title, filename, parentFolder, episodeInfo)
+        }
+    }
+
+    /**
+     * 结构优先：先看季集标识，再用关键词细分综艺/纪录片/动漫等（适合规范命名）
+     */
+    private fun determineMediaTypeStructureFirst(
+        title: String,
+        filename: String,
+        parentFolder: String,
+        episodeInfo: Pair<Int, Int>?
+    ): MediaType {
         val combinedText = "$title $filename $parentFolder".lowercase()
-        
-        // 检查演唱会
-        if (CONCERT_KEYWORDS.any { combinedText.contains(it.lowercase()) }) {
-            return MediaType.CONCERT
-        }
-        
-        // 检查综艺（需要有季集信息）
-        if (episodeInfo != null && VARIETY_KEYWORDS.any { combinedText.contains(it.lowercase()) }) {
-            return MediaType.VARIETY
-        }
-        
-        // 检查纪录片
-        if (DOCUMENTARY_KEYWORDS.any { combinedText.contains(it.lowercase()) }) {
-            return MediaType.DOCUMENTARY
-        }
-        
-        // 有季集信息 → 电视剧
-        if (episodeInfo != null) {
+        val hasEpisodeInfo = episodeInfo != null
+        val hasDateEpisodePattern = DATE_EPISODE_REGEX.containsMatchIn(filename)
+
+        val isVariety = VARIETY_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isAnime = ANIME_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isDocumentary = DOCUMENTARY_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isConcert = CONCERT_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+
+        if (isAnime) return MediaType.ANIME
+        if (isDocumentary) return MediaType.DOCUMENTARY
+
+        if (hasEpisodeInfo) {
+            if (isVariety || hasDateEpisodePattern) return MediaType.VARIETY
             return MediaType.TV_SHOW
         }
-        
-        // 默认电影
+
+        if (isConcert) return MediaType.CONCERT
+        if (isVariety && hasDateEpisodePattern) return MediaType.VARIETY
+
         return MediaType.MOVIE
+    }
+
+    /**
+     * 关键词优先：先看路径/文件名中的类型词，再看季集结构（适合按「综艺/纪录片」等分文件夹整理的资源）
+     */
+    private fun determineMediaTypeKeywordFirst(
+        title: String,
+        filename: String,
+        parentFolder: String,
+        episodeInfo: Pair<Int, Int>?
+    ): MediaType {
+        val combinedText = "$title $filename $parentFolder".lowercase()
+        val hasEpisodeInfo = episodeInfo != null
+        val hasDateEpisodePattern = DATE_EPISODE_REGEX.containsMatchIn(filename)
+
+        val isVariety = VARIETY_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isAnime = ANIME_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isDocumentary = DOCUMENTARY_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isConcert = CONCERT_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+
+        if (isConcert) return MediaType.CONCERT
+        if (isVariety || hasDateEpisodePattern) return MediaType.VARIETY
+        if (isDocumentary) return MediaType.DOCUMENTARY
+        if (isAnime) return MediaType.ANIME
+
+        if (hasEpisodeInfo) return MediaType.TV_SHOW
+        return MediaType.MOVIE
+    }
+
+    /**
+     * 移除“独立年份标记”
+     * 例如：`剧名 (2024)`、`剧名.2024.` 会移除；`你好1983` 不移除
+     */
+    private fun removeStandaloneYear(text: String): String {
+        return STANDALONE_YEAR_REGEX.replace(text) { match ->
+            val prefix = match.groupValues[1]
+            val suffix = match.groupValues[3]
+            when {
+                prefix.isNotEmpty() && suffix.isNotEmpty() -> "$prefix $suffix"
+                prefix.isNotEmpty() -> "$prefix "
+                suffix.isNotEmpty() -> " $suffix"
+                else -> " "
+            }
+        }
     }
     
     /**

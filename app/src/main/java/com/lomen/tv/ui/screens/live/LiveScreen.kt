@@ -40,6 +40,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import android.widget.Toast
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -224,11 +225,22 @@ fun LiveScreen(
                         exoPlayer.videoFormat?.let { format ->
                             videoWidth = format.width
                             videoHeight = format.height
-                            android.util.Log.d("LiveScreen", "视频格式: ${format.sampleMimeType}, 编码: ${format.codecs}, 分辨率: ${format.width}x${format.height}, 码率: ${format.bitrate}")
+                            android.util.Log.d("LiveScreen", "视频格式：${format.sampleMimeType}, 编码：${format.codecs}, 分辨率：${format.width}x${format.height}, 码率：${format.bitrate}")
                         }
-                        // 检查音频格式
-                        exoPlayer.audioFormat?.let { format ->
-                            android.util.Log.d("LiveScreen", "音频格式: ${format.sampleMimeType}, 编码: ${format.codecs}, 声道: ${format.channelCount}, 采样率: ${format.sampleRate}")
+                        // 检查音频格式 - 增强检测
+                        val audioFormat = exoPlayer.audioFormat
+                        if (audioFormat != null) {
+                            android.util.Log.d("LiveScreen", "===== 音频格式信息 =====")
+                            android.util.Log.d("LiveScreen", "音频格式：${audioFormat.sampleMimeType}")
+                            android.util.Log.d("LiveScreen", "音频编码：${audioFormat.codecs}")
+                            android.util.Log.d("LiveScreen", "声道数：${audioFormat.channelCount}")
+                            android.util.Log.d("LiveScreen", "采样率：${audioFormat.sampleRate}")
+                            android.util.Log.d("LiveScreen", "比特率：${audioFormat.bitrate}")
+                            android.util.Log.d("LiveScreen", "语言：${audioFormat.language}")
+                            android.util.Log.d("LiveScreen", "========================")
+                        } else {
+                            android.util.Log.w("LiveScreen", "⚠️ 警告：没有检测到音频轨道！")
+                            android.util.Log.w("LiveScreen", "可能原因：1.视频源本身没有音频轨道 2.音频解码器不支持 3.音频轨道未被选中")
                         }
                         // 播放成功，重置重试计数和状态
                         retryCount = 0
@@ -500,7 +512,30 @@ fun LiveScreen(
     // 释放播放器
     DisposableEffect(Unit) {
         onDispose {
+            android.util.Log.d("LiveScreen", "LiveScreen 销毁，释放播放器")
             exoPlayer.release()
+        }
+    }
+    
+    // 监听应用生命周期，当应用进入后台时暂停播放
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                // 应用进入后台，停止播放以释放资源
+                android.util.Log.d("LiveScreen", "应用进入后台，停止播放")
+                exoPlayer.stop()
+            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
+                // 应用回到前台，恢复播放（如果需要）
+                android.util.Log.d("LiveScreen", "应用回到前台，恢复播放")
+                exoPlayer.play()
+            }
+        }
+        
+        lifecycleOwner.lifecycle.addObserver(observer)
+        
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -628,7 +663,7 @@ fun LiveScreen(
                             }
                             else -> {
                                 backPressCount++
-                                android.util.Log.d("LiveScreen", "backPressCount 增加到: $backPressCount")
+                                android.util.Log.d("LiveScreen", "backPressCount 增加到：$backPressCount")
                                 if (backPressCount >= 2) {
                                     android.util.Log.d("LiveScreen", "调用 onNavigateBack")
                                     onNavigateBack()
@@ -639,6 +674,26 @@ fun LiveScreen(
                             }
                         }
                         true // 消费事件
+                    } else if (keyEvent.type == androidx.compose.ui.input.key.KeyEventType.KeyUp) {
+                        // 在 onPreviewKeyEvent 中直接处理菜单键（兼容不同品牌的特殊键值）
+                        val keyCode = keyEvent.nativeKeyEvent.keyCode
+                        val isMenuKey = keyCode == KeyEvent.KEYCODE_MENU || 
+                                       keyCode == KeyEvent.KEYCODE_SETTINGS || 
+                                       keyCode == KeyEvent.KEYCODE_HELP ||
+                                       keyCode == KeyEvent.KEYCODE_BUTTON_1 ||  // 小米电视等可能使用这个
+                                       keyCode == KeyEvent.KEYCODE_BUTTON_START ||  // 某些遥控器
+                                       keyCode == KeyEvent.KEYCODE_GUIDE ||  // 电子节目指南键
+                                       keyCode == KeyEvent.KEYCODE_INFO  // 信息键
+                        
+                        if (isMenuKey) {
+                            android.util.Log.d("LiveScreen", "onPreviewKeyEvent 收到菜单键 (keyCode=$keyCode)，呼出状态栏")
+                            if (!isPanelVisible) {
+                                isStatusBarVisible = !isStatusBarVisible
+                            }
+                            true // 消费事件
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }

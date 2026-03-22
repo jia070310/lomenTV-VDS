@@ -29,9 +29,10 @@ class MediaTypeSortPreferences @Inject constructor(
     companion object {
         private val SORT_ORDER_KEY = stringPreferencesKey("media_type_sort_order")
         
-        // 默认排序：电视剧 → 电影 → 综艺 → 演唱会 → 纪录片 → 其它
+        // 默认排序：电视剧 → 动漫 → 电影 → 综艺 → 演唱会 → 纪录片 → 其它
         val DEFAULT_SORT_ORDER = listOf(
             MediaType.TV_SHOW,
+            MediaType.ANIME,
             MediaType.MOVIE,
             MediaType.VARIETY,
             MediaType.CONCERT,
@@ -49,12 +50,18 @@ class MediaTypeSortPreferences @Inject constructor(
             DEFAULT_SORT_ORDER
         } else {
             try {
-                orderString.split(",").mapNotNull { name ->
+                val parsed = orderString.split(",").mapNotNull { name ->
                     try {
                         MediaType.valueOf(name)
                     } catch (e: IllegalArgumentException) {
                         null
                     }
+                }
+                if (parsed.isEmpty()) {
+                    DEFAULT_SORT_ORDER
+                } else {
+                    val missing = DEFAULT_SORT_ORDER.filterNot { it in parsed }
+                    parsed + missing
                 }
             } catch (e: Exception) {
                 DEFAULT_SORT_ORDER

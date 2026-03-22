@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,7 +31,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -48,17 +49,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,6 +68,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -90,6 +92,23 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+private fun PlayerView.applyTransparentSubtitleStyle() {
+    subtitleView?.apply {
+        // 关闭字幕文件内的底色/窗口色（ASS 等常为黑底），改由 CaptionStyle 统一绘制
+        setApplyEmbeddedStyles(false)
+        setStyle(
+            CaptionStyleCompat(
+                android.graphics.Color.WHITE,
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT,
+                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                android.graphics.Color.BLACK,
+                /* typeface= */ null
+            )
+        )
+    }
+}
 
 // 控制栏模式枚举
 enum class ControlsMode {
@@ -117,6 +136,9 @@ fun PlayerScreen(
     // 当前播放的标题（可在切换剧集时更新）
     var currentTitle by remember { mutableStateOf(title) }
     var currentEpisodeTitle by remember { mutableStateOf(episodeTitle) }
+    /** 同一次播放会话内切换集数后，与 ViewModel 同步，用于选集高亮与清晰度行 */
+    var sessionEpisodeId by remember { mutableStateOf(episodeId) }
+    LaunchedEffect(episodeId) { sessionEpisodeId = episodeId }
     
     // 对话框状态
     var showSubtitleDialog by remember { mutableStateOf(false) }
@@ -180,13 +202,18 @@ fun PlayerScreen(
     // 返回按钮焦点请求器
     val backButtonFocusRequester = remember { FocusRequester() }
 
-    // 设置媒体信息（用于保存播放历史）
+    // 设置媒体信息、跳过配置、选集列表（同一 Effect，避免与下方 getEpisodeList 竞态导致选集恒空）
     LaunchedEffect(mediaId, episodeId) {
         if (mediaId != null) {
             viewModel.setMediaInfo(mediaId, episodeId)
-            // 加载跳过片头片尾配置
-            // 使用电视剧级别的配置（对于WebDAV媒体，使用系列ID而不是单集ID）
             viewModel.loadSkipConfigForSeries(mediaId, seasonNumber = 0)
+            episodeList = viewModel.getEpisodeList()
+            qualityOptions = viewModel.getQualityOptions()
+            if (qualityOptions.isNotEmpty()) {
+                val currentId = episodeId ?: mediaId
+                val currentQuality = qualityOptions.find { it.id == currentId }
+                currentQualityLabel = currentQuality?.label ?: "高清"
+            }
         }
     }
     
@@ -225,20 +252,6 @@ fun PlayerScreen(
         focusRequester.requestFocus()
     }
     
-    // 加载剧集列表和清晰度选项
-    LaunchedEffect(mediaId, episodeId) {
-        if (mediaId != null) {
-            episodeList = viewModel.getEpisodeList()
-            qualityOptions = viewModel.getQualityOptions()
-            // 检测当前清晰度
-            if (qualityOptions.isNotEmpty()) {
-                val currentId = episodeId ?: mediaId
-                val currentQuality = qualityOptions.find { it.id == currentId }
-                currentQualityLabel = currentQuality?.label ?: "高清"
-            }
-        }
-    }
-    
     // 更新当前播放速度，并检查跳过片头
     LaunchedEffect(playerState.isPlaying, skipConfig, autoSkipIntroOutro) {
         // 当开始播放时，且配置已加载，且自动跳过开关打开时，检查是否需要跳过片头
@@ -265,13 +278,13 @@ fun PlayerScreen(
     // 注意：起始位置现在在 prepareMedia 时直接设置，不需要在这里再次跳转
 
     // 自动隐藏控制栏：从用户停止操作开始计时
-    LaunchedEffect(showControls, lastInteractionTime) {
-        if (showControls) {
+    LaunchedEffect(showControls, lastInteractionTime, showEpisodeListDialog) {
+        if (showControls && !showEpisodeListDialog) {
             // 等待5秒
             delay(5000)
             // 检查是否已经超过5秒没有操作
             val timeSinceLastInteraction = System.currentTimeMillis() - lastInteractionTime
-            if (timeSinceLastInteraction >= 5000) {
+            if (timeSinceLastInteraction >= 5000 && !showEpisodeListDialog) {
                 // 超过5秒没有操作，隐藏控制栏
                 showControls = false
                 controlsMode = null
@@ -312,7 +325,9 @@ fun PlayerScreen(
     var backPressJob by remember { mutableStateOf<Job?>(null) }
     
     BackHandler {
-        if (showControls) {
+        if (showEpisodeListDialog) {
+            showEpisodeListDialog = false
+        } else if (showControls) {
             showControls = false
             controlsMode = null
         } else {
@@ -344,6 +359,22 @@ fun PlayerScreen(
             .background(BackgroundDark)
             .focusable()
             .focusRequester(focusRequester)
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
+                    if (showEpisodeListDialog) {
+                        showEpisodeListDialog = false
+                        true
+                    } else if (showControls) {
+                        showControls = false
+                        controlsMode = null
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
             .onKeyEvent { event ->
                 if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
                     when (event.nativeKeyEvent.keyCode) {
@@ -405,8 +436,8 @@ fun PlayerScreen(
                                 showControls = true
                                 controlsMode = ControlsMode.NAV
                                 updateInteractionTime { lastInteractionTime = it }
-                                // 返回false让系统继续处理焦点移动，焦点会自然落到播放/暂停按钮
-                                false
+                                // 直接消费按键，焦点由 LaunchedEffect 主动请求到播放/暂停按钮
+                                true
                             } else if (controlsMode == ControlsMode.NAV) {
                                 // 导航模式下，返回false让系统处理焦点移动（从返回按钮移到播放按钮）
                                 updateInteractionTime { lastInteractionTime = it }
@@ -439,7 +470,10 @@ fun PlayerScreen(
                         }
                         // 返回键：隐藏状态栏
                         KeyEvent.KEYCODE_BACK -> {
-                            if (showControls) {
+                            if (showEpisodeListDialog) {
+                                showEpisodeListDialog = false
+                                true
+                            } else if (showControls) {
                                 showControls = false
                                 controlsMode = null
                                 true
@@ -462,6 +496,7 @@ fun PlayerScreen(
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     // 保持屏幕常亮
                     setKeepScreenOn(true)
+                    applyTransparentSubtitleStyle()
                     // 设置播放器
                     player = viewModel.getPlayer()
                     android.util.Log.d("PlayerScreen", "PlayerView created, player=${player}")
@@ -553,30 +588,11 @@ fun PlayerScreen(
                 onShowAudioTrackDialog = { showAudioTrackDialog = true },
                 onShowSpeedDialog = { showSpeedDialog = true },
                 onShowQualityDialog = { showQualityDialog = true },
-                // 选集相关
-                episodes = episodeList,
-                currentEpisodeId = episodeId,
-                onSelectEpisode = { episode ->
-                    CoroutineScope(Dispatchers.Main).launch {
-                        val videoUrl = viewModel.resolvePlaybackUrl(episode.path ?: "")
-                        
-                        // 构造正确的 episodeTitle（只包含集数和副标题，不包含剧名）
-                        val newEpisodeTitle = if (episode.title.isNotEmpty()) {
-                            "第${episode.episodeNumber}集 ${episode.title}"
-                        } else {
-                            "第${episode.episodeNumber}集"
-                        }
-                        
-                        // 更新当前剧集信息
-                        viewModel.setMediaInfo(mediaId ?: "", episode.id)
-                        
-                        // 更新显示的标题
-                        currentEpisodeTitle = newEpisodeTitle
-                        
-                        // 在当前播放器中切换剧集，不启动新 Activity
-                        viewModel.prepareMedia(videoUrl, currentTitle, newEpisodeTitle, 0L)
-                    }
+                onShowEpisodeList = {
+                    showEpisodeListDialog = true
+                    lastInteractionTime = System.currentTimeMillis()
                 },
+                hasEpisodes = episodeList.isNotEmpty(),
                 // 跳过片头片尾
                 onShowSkipConfigDialog = { showSkipConfigDialog = true },
                 onSkipIntro = { viewModel.skipIntro() },
@@ -584,6 +600,41 @@ fun PlayerScreen(
                 // 只有在自动跳过开关打开时才显示跳过按钮
                 skipIntroAvailable = autoSkipIntroOutro && skipConfig?.skipIntroEnabled == true && playerState.currentPosition < (skipConfig?.introDuration ?: 0),
                 skipOutroAvailable = autoSkipIntroOutro && skipConfig?.skipOutroEnabled == true && playerState.duration > 0 && playerState.currentPosition > (playerState.duration - (skipConfig?.outroDuration ?: 0))
+            )
+        }
+
+        // 选集窗口（参照截图：右上固定面板）
+        if (showEpisodeListDialog && episodeList.isNotEmpty()) {
+            EpisodeListPanel(
+                episodes = episodeList,
+                currentEpisodeId = sessionEpisodeId,
+                onDismiss = { showEpisodeListDialog = false },
+                onSelectEpisode = { episode ->
+                    showEpisodeListDialog = false
+                    CoroutineScope(Dispatchers.Main).launch {
+                        viewModel.saveWatchProgressBeforeEpisodeSelectionSwitch()
+                        val resumePositionMs = viewModel.getResumeStartPositionForEpisodeSelection(episode.id)
+                        val resolvedUrl = viewModel.resolvePlaybackUrl(episode.path ?: "")
+                        val newEpisodeTitle = if (episode.title.isNotEmpty()) {
+                            "第${episode.episodeNumber}集 ${episode.title}"
+                        } else {
+                            "第${episode.episodeNumber}集"
+                        }
+                        viewModel.setMediaInfo(mediaId ?: "", episode.id)
+                        sessionEpisodeId = episode.id
+                        currentEpisodeTitle = newEpisodeTitle
+                        viewModel.prepareMedia(resolvedUrl, currentTitle, newEpisodeTitle, resumePositionMs)
+                        qualityOptions = viewModel.getQualityOptions()
+                        if (qualityOptions.isNotEmpty()) {
+                            val q = qualityOptions.find { it.id == episode.id }
+                            currentQualityLabel = q?.label ?: "高清"
+                        }
+                    }
+                },
+                onUserInteraction = { lastInteractionTime = System.currentTimeMillis() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 74.dp)
             )
         }
         
@@ -631,7 +682,7 @@ fun PlayerScreen(
         if (showQualityDialog) {
             QualitySelectionDialog(
                 qualities = qualityOptions,
-                currentQualityId = episodeId ?: mediaId ?: "",
+                currentQualityId = sessionEpisodeId ?: mediaId ?: "",
                 onDismiss = { showQualityDialog = false },
                 onSelect = { quality ->
                     CoroutineScope(Dispatchers.Main).launch {
@@ -758,7 +809,7 @@ private fun PlayerTopBar(
                         .onFocusChanged { isBackFocused = it.isFocused }
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBackIos,
+                        imageVector = Icons.Default.ArrowBack,
                         contentDescription = "Back",
                         tint = if (isBackFocused) Color.Black else TextPrimary,
                         modifier = Modifier.size(24.dp)
@@ -836,10 +887,8 @@ private fun PlayerControls(
     onShowAudioTrackDialog: () -> Unit = {},
     onShowSpeedDialog: () -> Unit = {},
     onShowQualityDialog: () -> Unit = {},
-    // 选集相关
-    episodes: List<PlayerViewModel.EpisodeListItem> = emptyList(),
-    currentEpisodeId: String? = null,
-    onSelectEpisode: (PlayerViewModel.EpisodeListItem) -> Unit = {},
+    onShowEpisodeList: () -> Unit = {},
+    hasEpisodes: Boolean = false,
     // 跳过片头片尾
     onShowSkipConfigDialog: () -> Unit = {},
     onSkipIntro: () -> Unit = {},
@@ -847,10 +896,6 @@ private fun PlayerControls(
     skipIntroAvailable: Boolean = false,
     skipOutroAvailable: Boolean = false
 ) {
-    // 选集弹出菜单状态
-    var showEpisodePopup by remember { mutableStateOf(false) }
-    var episodeButtonCoords by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
-    
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1109,37 +1154,16 @@ private fun PlayerControls(
                     isLocked = isLocked
                 )
 
-                // 选集按钮（带弹出菜单）
-                Box {
-                    ControlPillButton(
-                        text = "选集",
-                        onClick = { 
-                            if (!isLocked) {
-                                showEpisodePopup = true
-                                onUpdateInteractionTime()
-                            }
-                        },
-                        isLocked = isLocked,
-                        modifier = Modifier.onGloballyPositioned { coordinates ->
-                            val bounds = coordinates.boundsInWindow()
-                            episodeButtonCoords = bounds
+                ControlPillButton(
+                    text = "选集",
+                    onClick = {
+                        if (!isLocked && hasEpisodes) {
+                            onShowEpisodeList()
+                            onUpdateInteractionTime()
                         }
-                    )
-                    
-                    // 选集弹出菜单
-                    if (showEpisodePopup && episodes.isNotEmpty()) {
-                        EpisodeListPopup(
-                            episodes = episodes,
-                            currentEpisodeId = currentEpisodeId,
-                            onDismiss = { showEpisodePopup = false },
-                            onSelectEpisode = { episode ->
-                                showEpisodePopup = false
-                                onSelectEpisode(episode)
-                            },
-                            anchorPosition = episodeButtonCoords
-                        )
-                    }
-                }
+                    },
+                    isLocked = isLocked || !hasEpisodes
+                )
 
                 // 清晰度按钮（原蓝光按钮）
                 ControlPillButton(
@@ -1165,6 +1189,158 @@ private fun PlayerControls(
                     },
                     isLocked = isLocked
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun EpisodeListPanel(
+    episodes: List<PlayerViewModel.EpisodeListItem>,
+    currentEpisodeId: String?,
+    onDismiss: () -> Unit,
+    onSelectEpisode: (PlayerViewModel.EpisodeListItem) -> Unit,
+    onUserInteraction: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val focusRequesters = remember(episodes.size) {
+        List(episodes.size) { FocusRequester() }
+    }
+    val currentIndex = episodes.indexOfFirst { it.id == currentEpisodeId }.let { if (it >= 0) it else 0 }
+
+    var lastInteractionAt by remember { mutableStateOf(System.currentTimeMillis()) }
+    val markInteraction = {
+        lastInteractionAt = System.currentTimeMillis()
+        onUserInteraction()
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(300)
+            val inactiveFor = System.currentTimeMillis() - lastInteractionAt
+            if (inactiveFor >= 5000) {
+                onDismiss()
+                break
+            }
+        }
+    }
+    LaunchedEffect(currentEpisodeId, episodes.size) {
+        if (episodes.isNotEmpty()) {
+            delay(120)
+            focusRequesters[currentIndex].requestFocus()
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .width(420.dp)
+            .height(540.dp)
+            .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .padding(24.dp)
+            .onPreviewKeyEvent { keyEvent ->
+                markInteraction()
+                if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+    ) {
+        Text(
+            text = "播放列表",
+            style = MaterialTheme.typography.titleLarge,
+            color = Color.White,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            itemsIndexed(episodes) { index, episode ->
+                val isSelected = episode.id == currentEpisodeId
+                var isFocused by remember { mutableStateOf(false) }
+                val displayText = if (episode.title.isNotEmpty()) {
+                    "第${episode.episodeNumber}集 - ${episode.title}"
+                } else {
+                    "第${episode.episodeNumber}集"
+                }
+
+                Button(
+                    onClick = {
+                        markInteraction()
+                        onSelectEpisode(episode)
+                    },
+                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(4.dp)),
+                    scale = ButtonDefaults.scale(
+                        scale = 1.0f,
+                        focusedScale = 1.02f,
+                        pressedScale = 1.0f
+                    ),
+                    colors = ButtonDefaults.colors(
+                        containerColor = SurfaceDark,
+                        focusedContainerColor = PrimaryYellow,
+                        contentColor = TextPrimary,
+                        focusedContentColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .focusRequester(focusRequesters[index])
+                        .focusProperties {
+                            // 锁定焦点在窗口内：左右不外溢
+                            left = focusRequesters[index]
+                            right = focusRequesters[index]
+                        }
+                        .onPreviewKeyEvent { keyEvent ->
+                            markInteraction()
+                            if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (keyEvent.key) {
+                                // 边界锁定：顶部继续上/底部继续下时，阻止焦点跑出窗口
+                                Key.DirectionUp -> index == 0
+                                Key.DirectionDown -> index == episodes.lastIndex
+                                Key.DirectionLeft,
+                                Key.DirectionRight -> true
+                                else -> false
+                            }
+                        }
+                        .onKeyEvent { keyEvent ->
+                            // 仅锁定左右方向，保留上下给 LazyColumn 处理滚动与焦点
+                            if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                            when (keyEvent.key) {
+                                Key.DirectionLeft, Key.DirectionRight -> true
+                                else -> false
+                            }
+                        }
+                        .onFocusChanged {
+                            isFocused = it.isFocused
+                            if (it.isFocused) markInteraction()
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = displayText,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isFocused) Color.Black else TextPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "正在播放",
+                                tint = if (isFocused) Color.Black else TextPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -1231,11 +1407,20 @@ private fun SubtitleSelectionDialog(
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit
 ) {
+    val focusRequesters = remember(subtitles.size) { List(subtitles.size) { FocusRequester() } }
+    val targetIndex = selectedIndex.coerceIn(0, (subtitles.size - 1).coerceAtLeast(0))
+    LaunchedEffect(subtitles.size, selectedIndex) {
+        if (subtitles.isNotEmpty()) {
+            delay(100)
+            focusRequesters[targetIndex].requestFocus()
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp))
+                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                 .padding(24.dp)
         ) {
             Text(
@@ -1260,6 +1445,7 @@ private fun SubtitleSelectionDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
+                            .focusRequester(focusRequesters[index])
                             .onFocusChanged { isFocused = it.isFocused },
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceDark,
@@ -1289,11 +1475,20 @@ private fun AudioTrackSelectionDialog(
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit
 ) {
+    val focusRequesters = remember(audioTracks.size) { List(audioTracks.size) { FocusRequester() } }
+    val targetIndex = selectedIndex.coerceIn(0, (audioTracks.size - 1).coerceAtLeast(0))
+    LaunchedEffect(audioTracks.size, selectedIndex) {
+        if (audioTracks.isNotEmpty()) {
+            delay(100)
+            focusRequesters[targetIndex].requestFocus()
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp))
+                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                 .padding(24.dp)
         ) {
             Text(
@@ -1318,6 +1513,7 @@ private fun AudioTrackSelectionDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
+                            .focusRequester(focusRequesters[index])
                             .onFocusChanged { isFocused = it.isFocused },
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceDark,
@@ -1347,11 +1543,20 @@ private fun SpeedSelectionDialog(
     onDismiss: () -> Unit,
     onSelect: (Float) -> Unit
 ) {
+    val focusRequesters = remember(speeds.size) { List(speeds.size) { FocusRequester() } }
+    val targetIndex = speeds.indexOfFirst { it == currentSpeed }.let { if (it >= 0) it else 0 }
+    LaunchedEffect(speeds.size, currentSpeed) {
+        if (speeds.isNotEmpty()) {
+            delay(100)
+            focusRequesters[targetIndex].requestFocus()
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp))
+                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                 .padding(24.dp)
         ) {
             Text(
@@ -1361,7 +1566,7 @@ private fun SpeedSelectionDialog(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             
-            speeds.forEach { speed ->
+            speeds.forEachIndexed { index, speed ->
                 var isFocused by remember { mutableStateOf(false) }
                 val isSelected = speed == currentSpeed
                 Button(
@@ -1369,6 +1574,7 @@ private fun SpeedSelectionDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
+                        .focusRequester(focusRequesters[index])
                         .onFocusChanged { isFocused = it.isFocused },
                     colors = ButtonDefaults.colors(
                         containerColor = SurfaceDark,
@@ -1388,127 +1594,6 @@ private fun SpeedSelectionDialog(
     }
 }
 
-// 选集列表弹出菜单（在选集按钮上方弹出）
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun EpisodeListPopup(
-    episodes: List<PlayerViewModel.EpisodeListItem>,
-    currentEpisodeId: String?,
-    onDismiss: () -> Unit,
-    onSelectEpisode: (PlayerViewModel.EpisodeListItem) -> Unit,
-    anchorPosition: androidx.compose.ui.geometry.Rect
-) {
-    val density = LocalDensity.current
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
-    val screenWidth = configuration.screenWidthDp.dp
-    
-    // 计算弹出位置：在按钮上方居中，高度拉满屏幕
-    val popupHeight = screenHeight - 100.dp // 距离顶部和底部各留一些边距
-    val popupWidth = 400.dp
-    
-    // 计算按钮中心位置
-    val buttonCenterX = with(density) { (anchorPosition.left + anchorPosition.right) / 2 }
-    
-    // 计算偏移量：让弹出菜单在按钮上方居中，顶部对齐
-    val offsetX = with(density) { buttonCenterX.toDp() - popupWidth / 2 }
-    val offsetY = 50.dp // 距离顶部50dp
-    
-    Popup(
-        offset = IntOffset(
-            x = with(density) { offsetX.toPx() }.toInt().coerceIn(0, with(density) { (screenWidth - popupWidth).toPx() }.toInt()),
-            y = with(density) { offsetY.toPx() }.toInt()
-        ),
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
-    ) {
-        Column(
-            modifier = Modifier
-                .width(popupWidth)
-                .height(popupHeight)
-                .background(Color.Black.copy(alpha = 0.95f), RoundedCornerShape(8.dp))
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-        ) {
-            // 标题
-            Text(
-                text = "播放列表",
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                color = Color.White,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-            
-            // 剧集列表
-            LazyColumn(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(episodes.size) { index ->
-                    val episode = episodes[index]
-                    val isSelected = episode.id == currentEpisodeId
-                    
-                    var isFocused by remember { mutableStateOf(false) }
-                    
-                    // 显示格式：第X集 - 副标题（如果有）
-                    val displayText = if (episode.title.isNotEmpty()) {
-                        "第${episode.episodeNumber}集 - ${episode.title}"
-                    } else {
-                        "第${episode.episodeNumber}集"
-                    }
-                    
-                    Button(
-                        onClick = { onSelectEpisode(episode) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                            .height(40.dp)
-                            .onFocusChanged { isFocused = it.isFocused },
-                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(4.dp)),
-                        colors = ButtonDefaults.colors(
-                            containerColor = SurfaceDark,
-                            focusedContainerColor = PrimaryYellow,
-                            contentColor = TextPrimary,
-                            focusedContentColor = Color.Black
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = displayText,
-                                style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 14.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                ),
-                                color = if (isFocused) Color.Black else TextPrimary,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-                            
-                            // 选中标记
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "正在播放",
-                                    tint = if (isFocused) Color.Black else TextPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // 清晰度选择对话框
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -1518,11 +1603,20 @@ private fun QualitySelectionDialog(
     onDismiss: () -> Unit,
     onSelect: (PlayerViewModel.QualityOption) -> Unit
 ) {
+    val focusRequesters = remember(qualities.size) { List(qualities.size) { FocusRequester() } }
+    val targetIndex = qualities.indexOfFirst { it.id == currentQualityId }.let { if (it >= 0) it else 0 }
+    LaunchedEffect(qualities.size, currentQualityId) {
+        if (qualities.isNotEmpty()) {
+            delay(100)
+            focusRequesters[targetIndex].requestFocus()
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp))
+                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                 .padding(24.dp)
         ) {
             Text(
@@ -1539,7 +1633,7 @@ private fun QualitySelectionDialog(
                     color = Color.White.copy(alpha = 0.6f)
                 )
             } else {
-                qualities.forEach { quality ->
+                qualities.forEachIndexed { index, quality ->
                     var isFocused by remember { mutableStateOf(false) }
                     val isSelected = quality.id == currentQualityId
                     Button(
@@ -1547,6 +1641,7 @@ private fun QualitySelectionDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
+                            .focusRequester(focusRequesters[index])
                             .onFocusChanged { isFocused = it.isFocused },
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceDark,

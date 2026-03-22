@@ -77,9 +77,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// V2 设计颜色
-private val BackgroundV2 = Color(0xFF050506)
-private val SidebarBackground = Color(0xFF0A0A0B)
+// V2 设计颜色（与设置中心保持一致）
+private val BackgroundV2 = BackgroundDark
+private val SidebarBackground = SurfaceDark
 private val GlassCardBackground = Color(0xFF18181B).copy(alpha = 0.4f)
 private val BorderColor = Color.White.copy(alpha = 0.05f)
 private val AccentYellow = Color(0xFFF59E0B)
@@ -114,7 +114,7 @@ fun ResourceLibraryScreen(
     // 计算统计数据
     val webDavCount = libraries.count { it.type == ResourceLibrary.LibraryType.WEBDAV }
     val quarkCount = libraries.count { it.type == ResourceLibrary.LibraryType.QUARK }
-    val activeCount = libraries.count { it.isActive }
+    val activeCount = libraries.count { checkResult[it.id] == true }
 
     // 延迟请求焦点，确保Compose已完成布局
     LaunchedEffect(libraries.size) {
@@ -126,6 +126,24 @@ fun ResourceLibraryScreen(
                 // 焦点请求失败时忽略错误
             }
         }
+    }
+
+    // 进入页面后自动检测所有资源库连通状态
+    LaunchedEffect(libraries) {
+        if (libraries.isEmpty()) {
+            checkResult = emptyMap()
+            checkingLibraryId = null
+            return@LaunchedEffect
+        }
+
+        val newResult = mutableMapOf<String, Boolean>()
+        libraries.forEach { library ->
+            checkingLibraryId = library.id
+            val connected = checkLibraryConnection(library)
+            newResult[library.id] = connected
+            checkResult = newResult.toMap()
+        }
+        checkingLibraryId = null
     }
 
     // 监听同步状态
@@ -226,9 +244,6 @@ private fun Sidebar(
     onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val dateFormat = SimpleDateFormat("yyyy年MM月dd日", Locale.getDefault())
-    val currentDate = dateFormat.format(Date())
-
     Column(
         modifier = modifier
             .fillMaxHeight()
@@ -239,16 +254,10 @@ private fun Sidebar(
         // 顶部标题区域
         Column {
             Text(
-                text = "柠檬TV",
+                text = "资源库",
                 style = MaterialTheme.typography.headlineLarge,
                 color = Color.White,
                 fontWeight = FontWeight.Black
-            )
-            Text(
-                text = currentDate,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextZinc500,
-                modifier = Modifier.padding(top = 8.dp)
             )
 
             Spacer(modifier = Modifier.height(48.dp))
@@ -427,19 +436,67 @@ private fun MainContent(
         if (libraries.isEmpty()) {
             EmptyLibraryViewV2(onAddLibrary = onAddLibrary)
         } else {
-            // 左右两栏布局
-            Row(
+            val webDavLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.WEBDAV }
+            val quarkLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.QUARK }
+            val firstFocusableLibraryId = webDavLibraries.firstOrNull()?.id ?: quarkLibraries.firstOrNull()?.id
+
+            // 上下两栏布局（顶部 WebDAV，底部网盘）
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                // 左侧 - 网盘区（始终显示）
-                val quarkLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.QUARK }
+                // 上方 - WEBDAV本地区（始终显示）
                 Column(
                     modifier = Modifier.weight(1f)
                 ) {
-                    SectionTitle(title = "网盘区", accentColor = AccentYellow)
+                    SectionTitle(title = "WEBDAV本地区", accentColor = AccentYellow)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    if (webDavLibraries.isNotEmpty()) {
+                        TvLazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(webDavLibraries) { library ->
+                                val isChecking = checkingLibraryId == library.id
+                                val isConnected = checkResult[library.id]
+                                LibraryListItemV2(
+                                    library = library,
+                                    isSelected = library.id == currentLibraryId,
+                                    isChecking = isChecking,
+                                    isConnected = isConnected,
+                                    enabled = !isSyncing,
+                                    onClick = {
+                                        handleLibraryClick(
+                                            library = library,
+                                            scope = scope,
+                                            onCheckingLibrary = onCheckingLibrary,
+                                            onCheckResult = onCheckResult,
+                                            onLibrarySelected = onLibrarySelected,
+                                            onNavigateBack = onNavigateBack,
+                                            onError = onError
+                                        )
+                                    },
+                                    onDelete = { onDeleteLibrary(library) },
+                                    onEdit = { onEditLibrary(library) },
+                                    modifier = if (library.id == firstFocusableLibraryId) {
+                                        Modifier.focusRequester(listFocusRequester)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                            }
+                        }
+                    } else {
+                        EmptyWebDavLibraryView(onAddLibrary = onAddLibrary)
+                    }
+                }
+
+                // 下方 - 网盘区（始终显示）
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    SectionTitle(title = "网盘区", accentColor = TextZinc600)
                     Spacer(modifier = Modifier.height(16.dp))
                     if (quarkLibraries.isNotEmpty()) {
                         TvLazyColumn(
@@ -467,7 +524,7 @@ private fun MainContent(
                                     },
                                     onDelete = { onDeleteLibrary(library) },
                                     onEdit = { onEditLibrary(library) },
-                                    modifier = if (quarkLibraries.indexOf(library) == 0) {
+                                    modifier = if (library.id == firstFocusableLibraryId) {
                                         Modifier.focusRequester(listFocusRequester)
                                     } else {
                                         Modifier
@@ -476,58 +533,11 @@ private fun MainContent(
                             }
                         }
                     } else {
-                        // 空状态提示
                         EmptyQuarkLibraryView()
                     }
                 }
 
-                // 右侧 - WEBDAV本地区（始终显示）
-                val webDavLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.WEBDAV }
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    SectionTitle(title = "WEBDAV本地区", accentColor = TextZinc600)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    if (webDavLibraries.isNotEmpty()) {
-                        TvLazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(webDavLibraries) { library ->
-                                val isChecking = checkingLibraryId == library.id
-                                val isConnected = checkResult[library.id]
-                                LibraryListItemV2(
-                                    library = library,
-                                    isSelected = library.id == currentLibraryId,
-                                    isChecking = isChecking,
-                                    isConnected = isConnected,
-                                    enabled = !isSyncing,
-                                    onClick = {
-                                        handleLibraryClick(
-                                            library = library,
-                                            scope = scope,
-                                            onCheckingLibrary = onCheckingLibrary,
-                                            onCheckResult = onCheckResult,
-                                            onLibrarySelected = onLibrarySelected,
-                                            onNavigateBack = onNavigateBack,
-                                            onError = onError
-                                        )
-                                    },
-                                    onDelete = { onDeleteLibrary(library) },
-                                    onEdit = { onEditLibrary(library) }
-                                )
-                            }
-
-                            // 添加按钮
-                            item {
-                                Spacer(modifier = Modifier.height(16.dp))
-                                AddLibraryButtonV2(onClick = onAddLibrary)
-                            }
-                        }
-                    } else {
-                        // 空状态提示
-                        EmptyWebDavLibraryView(onAddLibrary = onAddLibrary)
-                    }
-                }
+                AddLibraryButtonV2(onClick = onAddLibrary)
             }
         }
     }
@@ -655,21 +665,20 @@ private fun SectionTitle(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(bottom = 12.dp)
+        modifier = Modifier
     ) {
         Box(
             modifier = Modifier
                 .width(4.dp)
-                .height(20.dp)
+                .height(24.dp)
                 .clip(RoundedCornerShape(2.dp))
                 .background(accentColor)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = TextZinc400,
-            fontWeight = FontWeight.Bold
+            style = MaterialTheme.typography.headlineSmall,
+            color = TextPrimary
         )
     }
 }
@@ -687,147 +696,17 @@ private fun LibraryCardV2(
     onEdit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var isFocused by remember { mutableStateOf(false) }
-
-    Card(
-        onClick = { if (enabled) onClick() },
-        colors = CardDefaults.colors(
-            containerColor = if (isSelected) AccentYellow.copy(alpha = 0.15f) else GlassCardBackground,
-            focusedContainerColor = AccentYellow.copy(alpha = 0.25f)
-        ),
+    LibraryListItemV2(
+        library = library,
+        isSelected = isSelected,
+        isChecking = isChecking,
+        isConnected = isConnected,
+        enabled = enabled,
+        onClick = onClick,
+        onDelete = onDelete,
+        onEdit = onEdit,
         modifier = modifier
-            .fillMaxWidth()
-            .height(120.dp)
-            .onFocusChanged { isFocused = it.isFocused }
-            .then(
-                if (isFocused || isSelected) {
-                    Modifier.drawBehind {
-                        drawRoundRect(
-                            color = AccentYellow,
-                            cornerRadius = CornerRadius(24.dp.toPx(), 24.dp.toPx()),
-                            style = Stroke(width = 2.dp.toPx())
-                        )
-                    }
-                } else Modifier
-            )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 图标
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                AccentYellow.copy(alpha = 0.8f),
-                                AccentYellow
-                            )
-                        )
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Cloud,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(24.dp))
-
-            // 信息
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = library.name,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = Color.White,
-                    fontWeight = FontWeight.Black
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 状态指示器
-                    StatusIndicator(
-                        isChecking = isChecking,
-                        isConnected = isConnected
-                    )
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Text(
-                        text = if (isChecking) "检测中..."
-                        else if (isConnected == true) "在线"
-                        else if (isConnected == false) "离线"
-                        else "待检测",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = when {
-                            isChecking -> AccentYellow
-                            isConnected == true -> StatusGreen
-                            isConnected == false -> StatusRed
-                            else -> TextZinc500
-                        },
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Text(
-                        text = "|",
-                        color = TextZinc600
-                    )
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Text(
-                        text = library.getDisplayUrl(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextZinc400
-                    )
-                }
-            }
-
-            // 操作按钮
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                IconButton(
-                    onClick = { if (enabled) onEdit() },
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "编辑",
-                        tint = if (enabled) AccentYellow else TextZinc500,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = { if (enabled) onDelete() },
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "删除",
-                        tint = if (enabled) StatusRed else TextZinc500,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-        }
-    }
+    )
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -840,182 +719,144 @@ private fun LibraryListItemV2(
     enabled: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    var isCardFocused by remember { mutableStateOf(false) }
+    var isFocused by remember { mutableStateOf(false) }
     var isEditFocused by remember { mutableStateOf(false) }
     var isDeleteFocused by remember { mutableStateOf(false) }
 
-    // 使用Row将卡片和按钮并排显示，按钮独立在卡片外部
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 资源库信息卡片
         Card(
             onClick = { if (enabled) onClick() },
             colors = CardDefaults.colors(
-                containerColor = if (isCardFocused) FocusYellow else if (isSelected) GlassCardBackground else GlassCardBackground,
-                focusedContainerColor = FocusYellow
+                containerColor = SurfaceDark,
+                focusedContainerColor = PrimaryYellow
             ),
-            border = CardDefaults.border(
-                focusedBorder = androidx.tv.material3.Border(
-                    BorderStroke(2.dp, FocusYellow),
-                    shape = RoundedCornerShape(16.dp)
-                )
+            scale = CardDefaults.scale(
+                scale = 1.0f,
+                focusedScale = 1.01f,
+                pressedScale = 1.0f
             ),
-            scale = CardDefaults.scale(focusedScale = 1.02f),
             modifier = Modifier
                 .weight(1f)
-                .height(80.dp)
-                .onFocusChanged { isCardFocused = it.isFocused }
-                .then(
-                    if (isSelected && !isCardFocused) {
-                        Modifier.drawBehind {
-                            drawRoundRect(
-                                color = AccentYellow.copy(alpha = 0.6f),
-                                cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
-                                style = Stroke(width = 2.dp.toPx())
-                            )
-                        }
-                    } else Modifier
-                )
+                .height(82.dp)
+                .onFocusChanged { isFocused = it.isFocused }
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = if (isFocused) 0.35f else 0.12f)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // 图标
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isCardFocused) FocusYellow.copy(alpha = 0.3f) else SurfaceDark),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Storage,
-                            contentDescription = null,
-                            tint = if (isCardFocused) BackgroundDark else TextZinc400,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = if (library.type == ResourceLibrary.LibraryType.WEBDAV) Icons.Default.Storage else Icons.Default.Cloud,
+                        contentDescription = null,
+                        tint = if (isFocused) Color.Black else if (library.type == ResourceLibrary.LibraryType.WEBDAV) Color(0xFF60a5fa) else Color(0xFF34d399),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
 
-                    Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(14.dp))
 
-                    // 信息
-                    Column(
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = library.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = if (isCardFocused) BackgroundDark else if (isSelected) AccentYellow else Color.White,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = library.getDisplayUrl(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isCardFocused) BackgroundDark.copy(alpha = 0.7f) else TextZinc500,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    // 右侧状态
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (isSelected) {
-                            Text(
-                                text = "当前",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isCardFocused) BackgroundDark else AccentYellow,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = library.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (isFocused) Color.Black else TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusIndicator(
                             isChecking = isChecking,
                             isConnected = isConnected
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = library.getDisplayUrl(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isFocused) Color.Black.copy(alpha = 0.75f) else TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (isSelected) {
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "当前",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isFocused) Color.Black else AccentYellow,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // 独立的编辑按钮
         Card(
             onClick = { if (enabled) onEdit() },
             colors = CardDefaults.colors(
-                containerColor = if (isEditFocused) FocusYellow else GlassCardBackground,
-                focusedContainerColor = FocusYellow
+                containerColor = SurfaceDark,
+                focusedContainerColor = PrimaryYellow
             ),
-            border = CardDefaults.border(
-                focusedBorder = androidx.tv.material3.Border(
-                    BorderStroke(2.dp, FocusYellow),
-                    shape = RoundedCornerShape(12.dp)
-                )
+            scale = CardDefaults.scale(
+                scale = 1.0f,
+                focusedScale = 1.01f,
+                pressedScale = 1.0f
             ),
-            scale = CardDefaults.scale(focusedScale = 1.05f),
             modifier = Modifier
-                .size(56.dp)
+                .width(56.dp)
+                .height(82.dp)
                 .onFocusChanged { isEditFocused = it.isFocused }
         ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Default.Edit,
                     contentDescription = "编辑",
-                    tint = if (isEditFocused) BackgroundDark else if (enabled) AccentYellow else TextZinc500,
-                    modifier = Modifier.size(22.dp)
+                    tint = if (isEditFocused) Color.Black else AccentYellow,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
 
-        // 独立的删除按钮
         Card(
             onClick = { if (enabled) onDelete() },
             colors = CardDefaults.colors(
-                containerColor = if (isDeleteFocused) FocusYellow else GlassCardBackground,
-                focusedContainerColor = FocusYellow
+                containerColor = SurfaceDark,
+                focusedContainerColor = PrimaryYellow
             ),
-            border = CardDefaults.border(
-                focusedBorder = androidx.tv.material3.Border(
-                    BorderStroke(2.dp, FocusYellow),
-                    shape = RoundedCornerShape(12.dp)
-                )
+            scale = CardDefaults.scale(
+                scale = 1.0f,
+                focusedScale = 1.01f,
+                pressedScale = 1.0f
             ),
-            scale = CardDefaults.scale(focusedScale = 1.05f),
             modifier = Modifier
-                .size(56.dp)
+                .width(56.dp)
+                .height(82.dp)
                 .onFocusChanged { isDeleteFocused = it.isFocused }
         ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "删除",
-                    tint = if (isDeleteFocused) BackgroundDark else if (enabled) StatusRed else TextZinc500,
-                    modifier = Modifier.size(22.dp)
+                    tint = if (isDeleteFocused) Color.Black else StatusRed,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
@@ -1401,6 +1242,31 @@ private suspend fun checkWebDavConnection(library: ResourceLibrary): Boolean {
             code in 100..599
         } catch (e: Exception) {
             android.util.Log.e("WebDAV", "Connection failed: ${e.message}")
+            false
+        }
+    }
+}
+
+private suspend fun checkLibraryConnection(library: ResourceLibrary): Boolean {
+    return when (library.type) {
+        ResourceLibrary.LibraryType.WEBDAV -> checkWebDavConnection(library)
+        ResourceLibrary.LibraryType.QUARK -> checkQuarkConnection()
+    }
+}
+
+private suspend fun checkQuarkConnection(): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            val conn = URL("https://drive.quark.cn/").openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            val code = conn.responseCode
+            conn.disconnect()
+            code in 100..599
+        } catch (e: Exception) {
+            android.util.Log.e("Quark", "Connection failed: ${e.message}")
             false
         }
     }

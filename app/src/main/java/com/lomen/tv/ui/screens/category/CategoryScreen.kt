@@ -70,6 +70,7 @@ fun CategoryScreen(
     
     // 根据媒体类型获取对应的数据，并按最新添加排序
     val tvShowsRaw by resourceLibraryViewModel.tvShows.collectAsState()
+    val animeRaw by resourceLibraryViewModel.anime.collectAsState()
     val moviesRaw by resourceLibraryViewModel.movies.collectAsState()
     val varietyRaw by resourceLibraryViewModel.variety.collectAsState()
     val concertsRaw by resourceLibraryViewModel.concerts.collectAsState()
@@ -79,8 +80,13 @@ fun CategoryScreen(
     val tvShows = tvShowsRaw.sortedByDescending { series ->
         series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
     }
+    val anime = animeRaw.sortedByDescending { series ->
+        series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+    }
     val movies = moviesRaw.sortedByDescending { it.updatedAt }
-    val variety = varietyRaw.sortedByDescending { it.updatedAt }
+    val variety = varietyRaw.sortedByDescending { series ->
+        series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+    }
     val concerts = concertsRaw.sortedByDescending { it.updatedAt }
     val documentaries = documentariesRaw.sortedByDescending { it.updatedAt }
     val others = othersRaw.sortedByDescending { it.updatedAt }
@@ -88,8 +94,9 @@ fun CategoryScreen(
     // 获取标题和颜色
     val (title, accentColor, itemsCount) = when (mediaType) {
         MediaType.TV_SHOW -> Triple("电视剧", Color(0xFF10b981), tvShows.size)
+        MediaType.ANIME -> Triple("动漫", Color(0xFFf59e0b), anime.size)
         MediaType.MOVIE -> Triple("电影", PrimaryYellow, movies.size)
-        MediaType.VARIETY -> Triple("综艺", Color(0xFFec4899), variety.size)
+        MediaType.VARIETY -> Triple("综艺", Color(0xFFec4899), variety.size) // 按节目部数（多季合并）
         MediaType.CONCERT -> Triple("演唱会", Color(0xFFa855f7), concerts.size)
         MediaType.DOCUMENTARY -> Triple("纪录片", Color(0xFF3b82f6), documentaries.size)
         MediaType.OTHER -> Triple("其它", Color(0xFF6b7280), others.size)
@@ -159,10 +166,59 @@ fun CategoryScreen(
                             }
                         }
                     }
+                    MediaType.ANIME -> {
+                        val columns = CATEGORY_COLUMNS
+                        val rowCount = (anime.size + columns - 1) / columns
+                        items(rowCount) { rowIndex ->
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 48.dp)
+                            ) {
+                                for (column in 0 until columns) {
+                                    val index = rowIndex * columns + column
+                                    if (index < anime.size) {
+                                        val series = anime[index]
+                                        TvShowSeriesCard(
+                                            series = series,
+                                            onClick = { onNavigateToDetail(series.id) }
+                                        )
+                                    } else {
+                                        Spacer(modifier = Modifier.width(160.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    MediaType.VARIETY -> {
+                        val columns = CATEGORY_COLUMNS
+                        val rowCount = (variety.size + columns - 1) / columns
+                        items(rowCount) { rowIndex ->
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 48.dp)
+                            ) {
+                                for (column in 0 until columns) {
+                                    val index = rowIndex * columns + column
+                                    if (index < variety.size) {
+                                        val series = variety[index]
+                                        TvShowSeriesCard(
+                                            series = series,
+                                            onClick = { onNavigateToDetail(series.id) }
+                                        )
+                                    } else {
+                                        Spacer(modifier = Modifier.width(160.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
                     else -> {
                         val mediaList = when (mediaType) {
                             MediaType.MOVIE -> movies
-                            MediaType.VARIETY -> variety
                             MediaType.CONCERT -> concerts
                             MediaType.DOCUMENTARY -> documentaries
                             MediaType.OTHER -> others

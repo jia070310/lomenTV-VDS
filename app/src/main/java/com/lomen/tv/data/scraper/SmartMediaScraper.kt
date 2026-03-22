@@ -22,6 +22,26 @@ class SmartMediaScraper {
         private const val CONCURRENT_LIMIT = 15 // 增加并发限制到15，提高刮削速度
     }
 
+    /**
+     * 最终展示类型：**目录分库类型** > 文件名解析的细分类型（纪录/综艺/动漫等）> TMDB 推断的 TV/电影。
+     * 避免 TMDB multi 把「纪录片目录下的节目」强行压成 [MediaType.TV_SHOW]。
+     */
+    private fun resolveFinalScrapedType(
+        filePath: String,
+        mediaInfo: MediaInfo,
+        tmdbInferredType: MediaType
+    ): MediaType {
+        LibraryFolderTypeHints.detectMediaTypeFromPath(filePath)?.let { return it }
+        when (mediaInfo.type) {
+            MediaType.DOCUMENTARY,
+            MediaType.VARIETY,
+            MediaType.CONCERT,
+            MediaType.ANIME -> return mediaInfo.type
+            else -> { }
+        }
+        return tmdbInferredType
+    }
+
     private val tmdbScraper = TmdbScraper.getInstance()
     private val doubanScraper = DoubanScraper()
 
@@ -108,7 +128,7 @@ class SmartMediaScraper {
      */
     private fun getSeriesKey(file: WebDavFile): String {
         val parentFolder = file.path.substringBeforeLast("/", "").substringAfterLast("/", "")
-        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder)
+        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder, file.path)
 
         // 使用"父文件夹名_剧名_季数"作为键，确保不同文件夹下的剧集不会被错误聚类
         return if (mediaInfo.season != null) {
@@ -132,7 +152,7 @@ class SmartMediaScraper {
         client: com.lomen.tv.data.webdav.WebDavClient? = null
     ): ScrapedMedia? {
         val parentFolder = file.path.substringBeforeLast("/", "").substringAfterLast("/", "")
-        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder)
+        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder, file.path)
 
         Log.d(TAG, "刮削媒体信息: ${mediaInfo.title}, year: ${mediaInfo.year}, type: ${mediaInfo.type}, hasEpisode: ${mediaInfo.season != null || mediaInfo.episode != null}, tmdbId: ${mediaInfo.tmdbId}")
 
@@ -173,7 +193,7 @@ class SmartMediaScraper {
                     year = tmdbResult.year,
                     rating = tmdbResult.rating,
                     genres = tmdbResult.genres,
-                    type = mediaInfo.type,
+                    type = resolveFinalScrapedType(file.path, mediaInfo, mediaInfo.type),
                     seasonNumber = mediaInfo.season,
                     episodeNumber = mediaInfo.episode,
                     filePath = file.path,
@@ -265,7 +285,7 @@ class SmartMediaScraper {
                 year = finalResult.year,
                 rating = finalResult.rating,
                 genres = finalResult.genres,
-                type = finalType,  // 使用判断后的类型
+                type = resolveFinalScrapedType(file.path, mediaInfo, finalType),
                 seasonNumber = mediaInfo.season,
                 episodeNumber = mediaInfo.episode,
                 filePath = file.path,
@@ -339,7 +359,7 @@ class SmartMediaScraper {
                 year = finalResult.year,
                 rating = finalResult.rating,
                 genres = finalResult.genres,
-                type = finalType,  // 使用判断后的类型
+                type = resolveFinalScrapedType(file.path, mediaInfo, finalType),
                 seasonNumber = mediaInfo.season,
                 episodeNumber = mediaInfo.episode,
                 filePath = file.path,
@@ -362,7 +382,7 @@ class SmartMediaScraper {
                 year = doubanResult.year,
                 rating = doubanResult.rating,
                 genres = doubanResult.genres,
-                type = mediaInfo.type,  // 使用从文件名提取的类型
+                type = resolveFinalScrapedType(file.path, mediaInfo, mediaInfo.type),
                 seasonNumber = mediaInfo.season,
                 episodeNumber = mediaInfo.episode,
                 filePath = file.path,
@@ -536,12 +556,13 @@ class SmartMediaScraper {
         seriesInfo: ScrapedMedia?
     ): ScrapedMedia? {
         val parentFolder = file.path.substringBeforeLast("/", "").substringAfterLast("/", "")
-        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder)
+        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder, file.path)
 
         return if (seriesInfo != null) {
-            // 使用剧集信息，但更新文件特定的集数
+            // 使用剧集信息，但更新文件特定的集数；类型以当前路径为准（支持「按类型分目录」）
             seriesInfo.copy(
                 id = "${seriesInfo.id}_${file.path.hashCode()}", // 确保每个文件ID唯一
+                type = mediaInfo.type,
                 seasonNumber = mediaInfo.season,
                 episodeNumber = mediaInfo.episode,
                 filePath = file.path,
@@ -679,7 +700,7 @@ class SmartMediaScraper {
             
             if (title != null) {
                 val parentFolder = file.path.substringBeforeLast("/", "").substringAfterLast("/", "")
-                val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder)
+                val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder, file.path)
                 
                 return ScrapedMedia(
                     id = tmdbId ?: file.path.hashCode().toString(),
@@ -691,7 +712,7 @@ class SmartMediaScraper {
                     year = year,
                     rating = rating?.let { it * 2 }, // Kodi 评分通常是 0-10，转换为 0-20
                     genres = genres,
-                    type = mediaInfo.type,
+                    type = resolveFinalScrapedType(file.path, mediaInfo, mediaInfo.type),
                     seasonNumber = mediaInfo.season,
                     episodeNumber = mediaInfo.episode,
                     filePath = file.path,

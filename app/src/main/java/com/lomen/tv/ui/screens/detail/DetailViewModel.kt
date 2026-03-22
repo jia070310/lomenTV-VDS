@@ -7,10 +7,15 @@ import com.lomen.tv.data.local.database.dao.EpisodeDao
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.dao.WatchHistoryDao
+import com.lomen.tv.data.local.database.entity.WatchHistoryEntity
+import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
 import com.lomen.tv.data.scraper.DoubanScraper
+import com.lomen.tv.data.scraper.FolderSeriesNameParser
 import com.lomen.tv.data.scraper.TmdbScraper
 import com.lomen.tv.domain.model.MediaType
+import com.lomen.tv.domain.model.isLocalEpisodicSeries
 import com.lomen.tv.domain.service.MetadataService
+import com.lomen.tv.utils.FileNameParser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +41,26 @@ class DetailViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "DetailViewModel"
+
+        /** 综艺详情页标题用节目名（季在 Hero 区切换）；与首页合并卡片标题一致 */
+        fun varietyDisplayTitleForDetail(media: WebDavMediaEntity): String {
+            if (media.type != MediaType.VARIETY && media.type != MediaType.DOCUMENTARY) return media.title
+            return FolderSeriesNameParser.stripAllSeasonMarkers(media.title.trim())
+                .ifBlank { media.title.trim() }
+        }
+
+        /** 同系列搜索：用剥离季标记后的剧名，避免库内是「圆桌派」而当前条是「圆桌派 第八季」时搜不到 */
+        fun titleForSeriesSearch(media: WebDavMediaEntity): String {
+            if (media.type != MediaType.VARIETY &&
+                media.type != MediaType.TV_SHOW &&
+                media.type != MediaType.ANIME &&
+                media.type != MediaType.DOCUMENTARY
+            ) {
+                return media.title
+            }
+            return FolderSeriesNameParser.stripAllSeasonMarkers(media.title.trim())
+                .ifBlank { media.title.trim() }
+        }
     }
 
     private val _uiState = MutableStateFlow<DetailUiState>(DetailUiState.Loading)
@@ -51,6 +76,9 @@ class DetailViewModel @Inject constructor(
     
     // 所有剧集按季分组
     private var allEpisodesBySeason: Map<Int, List<EpisodeItem>> = emptyMap()
+    
+    // 当前媒体 ID
+    private var currentMediaId: String? = null
     
     /**
      * 切换选中的季数
@@ -74,6 +102,7 @@ class DetailViewModel @Inject constructor(
     fun loadMediaDetail(mediaId: String) {
         viewModelScope.launch {
             _uiState.value = DetailUiState.Loading
+            currentMediaId = null
 
             try {
                 // 首先尝试从WebDavMediaDao获取数据
@@ -88,10 +117,16 @@ class DetailViewModel @Inject constructor(
                 }
                 
                 if (webDavMedia != null) {
+                    // 记录真实媒体ID（避免把标题等非ID写入观看历史）
+                    currentMediaId = webDavMedia.id
                     // 获取TMDB总集数（如果有tmdbId） - 使用协程异步获取
                     var totalEpisodes: Int? = null
                     val tmdbIdStr = webDavMedia.tmdbId
-                    if (webDavMedia.type == MediaType.TV_SHOW && tmdbIdStr != null) {
+                    val isWebDavEpisodic = webDavMedia.type == MediaType.TV_SHOW ||
+                        webDavMedia.type == MediaType.VARIETY ||
+                        webDavMedia.type == MediaType.ANIME ||
+                        webDavMedia.type == MediaType.DOCUMENTARY
+                    if (isWebDavEpisodic && tmdbIdStr != null) {
                         totalEpisodes = withContext(Dispatchers.IO) {
                             try {
                                 val tmdbIdInt = tmdbIdStr.toIntOrNull()
@@ -129,10 +164,11 @@ class DetailViewModel @Inject constructor(
                         }
                     }
                     
-                    // 转换为UI模型
+                    // 转换为UI模型（综艺详情标题与首页卡片一致，不直接用 TMDB 里可能错误的「第八季」）
+                    val displayTitle = varietyDisplayTitleForDetail(webDavMedia)
                     val mediaDetail = MediaDetail(
                         id = webDavMedia.id,
-                        title = webDavMedia.title,
+                        title = displayTitle,
                         originalTitle = webDavMedia.originalTitle,
                         overview = webDavMedia.overview,
                         posterUrl = webDavMedia.posterUrl,
@@ -151,9 +187,12 @@ class DetailViewModel @Inject constructor(
                     val seasons: List<Int>
                     val initialSeason: Int
                     
-                    if (webDavMedia.type == MediaType.TV_SHOW) {
-                        // 按标题获取同系列的所有剧集
-                        val seriesEpisodes = webDavMediaDao.search(webDavMedia.title)
+                    if (isWebDavEpisodic) {
+                        // 按剥离季标记后的剧名搜索同系列（综艺/纪录片多季合并详情，在页内切换季）
+                        val rawSeries = webDavMediaDao.search(titleForSeriesSearch(webDavMedia))
+                        val seriesEpisodes = rawSeries.filter {
+                            it.libraryId == webDavMedia.libraryId && it.type == webDavMedia.type
+                        }
                         Log.d(TAG, "找到同系列剧集: ${seriesEpisodes.size} 个")
                         
                         // 获取TMDB剧集详情（如果有tmdbId）
@@ -176,7 +215,10 @@ class DetailViewModel @Inject constructor(
                         
                         // 将所有剧集转换为EpisodeItem，并使用TMDB信息丰富
                         val allEpisodes = seriesEpisodes.map { episode ->
-                            val episodeNumber = episode.episodeNumber ?: 1
+                            val parsed = episode.fileName?.let { FileNameParser.parse(it) }
+                            val parsedEp = parsed?.episode
+                            // 库内集号常误为 1：综艺/本地命名优先采用文件名解析的集号
+                            val episodeNumber = parsedEp ?: episode.episodeNumber ?: 1
                             val seasonNumber = episode.seasonNumber ?: 1
                             val tmdbEpisode = tmdbEpisodesMap[Pair(seasonNumber, episodeNumber)]
                             
@@ -217,13 +259,16 @@ class DetailViewModel @Inject constructor(
                         
                         // 筛选当前季的剧集
                         episodes = allEpisodesBySeason[initialSeason] ?: emptyList()
-                        Log.d(TAG, "当前季 $initialSeason 的剧集数量: ${episodes.size}")
+                        Log.d(TAG, "当前季 $initialSeason 的剧集数量：${episodes.size}")
+                                                                
+                        // 加载观看历史，更新剧集进度信息
+                        updateEpisodesWithWatchHistory(episodes, webDavMedia.id)
                     } else {
                         episodes = emptyList()
                         seasons = emptyList()
                         initialSeason = 1
                     }
-
+                    
                     // 先快速显示页面，演职人员稍后加载
                     _uiState.value = DetailUiState.Success(
                         media = mediaDetail,
@@ -295,6 +340,9 @@ class DetailViewModel @Inject constructor(
                     _uiState.value = DetailUiState.Error("未找到媒体信息")
                     return@launch
                 }
+                
+                // MovieEntity 场景下，使用真实 movieId
+                currentMediaId = movieEntity.id
 
                 // 转换为UI模型
                 val mediaDetail = MediaDetail(
@@ -313,8 +361,8 @@ class DetailViewModel @Inject constructor(
                     path = movieEntity.quarkPath
                 )
 
-                // 获取剧集列表（如果是电视剧）
-                val episodes = if (movieEntity.type == MediaType.TV_SHOW) {
+                // 获取剧集列表（电视剧 / 综艺 / 动漫 / 纪录片等多集类型）
+                val episodes = if (movieEntity.type.isLocalEpisodicSeries()) {
                     episodeDao.getEpisodesByMovieId(mediaId).first().map { entity ->
                         EpisodeItem(
                             id = entity.id,
@@ -332,8 +380,8 @@ class DetailViewModel @Inject constructor(
                     emptyList()
                 }
                 
-                // 对于电视剧，按季分组
-                if (movieEntity.type == MediaType.TV_SHOW && episodes.isNotEmpty()) {
+                // 多集类型，按季分组
+                if (movieEntity.type.isLocalEpisodicSeries() && episodes.isNotEmpty()) {
                     allEpisodesBySeason = episodes.groupBy { it.seasonNumber }
                     val seasons = allEpisodesBySeason.keys.sorted()
                     _availableSeasons.value = seasons
@@ -375,6 +423,164 @@ class DetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 根据观看历史更新剧集进度信息
+     */
+    private suspend fun updateEpisodesWithWatchHistory(episodes: List<EpisodeItem>, mediaId: String) {
+        // 对于电视剧，需要获取同系列的所有剧集的观看历史
+        val currentState = _uiState.value
+        if (currentState !is DetailUiState.Success) return
+        
+        val media = currentState.media
+        val episodic = media.type == MediaType.TV_SHOW ||
+            media.type == MediaType.VARIETY ||
+            media.type == MediaType.ANIME ||
+            media.type == MediaType.DOCUMENTARY
+        if (!episodic) return
+        
+        // 获取同系列的所有剧集 ID
+        val allEpisodeIds = mutableListOf<String>()
+        for ((_, episodeList) in allEpisodesBySeason) {
+            allEpisodeIds.addAll(episodeList.map { it.id })
+        }
+        
+        // 获取这些剧集的观看历史
+        val updatedEpisodes = episodes.map { episode ->
+            val history = watchHistoryDao.getWatchHistory(mediaId, episode.id)
+            if (history != null) {
+                episode.copy(
+                    progress = history.progress,
+                    duration = history.duration,
+                    isWatched = history.progress > history.duration * 0.9
+                )
+            } else {
+                episode
+            }
+        }
+        
+        // 更新 UI 状态中的剧集列表
+        _uiState.value = (currentState as DetailUiState.Success).copy(
+            episodes = updatedEpisodes
+        )
+    }
+    
+    /**
+     * 获取应该播放的起始位置（用于立即播放按钮）
+     */
+    suspend fun getResumePlaybackInfo(): ResumePlaybackInfo? {
+        val mediaId = currentMediaId ?: return null
+        val currentState = _uiState.value as? DetailUiState.Success ?: return null
+        val media = currentState.media
+        
+        if (media.type == MediaType.MOVIE) {
+            // 电影：直接返回电影本身的播放历史
+            val history = watchHistoryDao.getLatestWatchHistoryByMovieId(mediaId)
+            return if (history != null && history.progress > 0) {
+                ResumePlaybackInfo(
+                    videoUrl = media.path ?: "",
+                    title = media.title,
+                    episodeTitle = null,
+                    mediaId = mediaId,
+                    episodeId = null,
+                    startPosition = history.progress
+                )
+            } else {
+                // 没有观看历史，从头开始播放
+                ResumePlaybackInfo(
+                    videoUrl = media.path ?: "",
+                    title = media.title,
+                    episodeTitle = null,
+                    mediaId = mediaId,
+                    episodeId = null,
+                    startPosition = 0
+                )
+            }
+        } else {
+            // 电视剧 / 综艺 / 动漫 / 纪录片：查找最近观看的剧集
+            // 获取所有剧集
+            val allEpisodes = allEpisodesBySeason.values.flatten()
+            if (allEpisodes.isEmpty()) {
+                // 未合并到分集表时（或仅单文件）：按当前条目路径播放，与电影一致
+                val path = media.path?.takeIf { it.isNotBlank() } ?: return null
+                val history = watchHistoryDao.getLatestWatchHistoryByMovieId(mediaId)
+                val start = if (history != null && history.progress > 0) history.progress else 0L
+                return ResumePlaybackInfo(
+                    videoUrl = path,
+                    title = media.title,
+                    episodeTitle = null,
+                    mediaId = mediaId,
+                    episodeId = null,
+                    startPosition = start
+                )
+            }
+            
+            // 查找有观看历史的剧集中最新的一集
+            var latestHistory: WatchHistoryEntity? = null
+            var targetEpisode: EpisodeItem? = null
+            
+            for (episode in allEpisodes) {
+                val history = watchHistoryDao.getWatchHistory(mediaId, episode.id)
+                if (history != null) {
+                    if (latestHistory == null || history.lastWatchedAt > latestHistory.lastWatchedAt) {
+                        latestHistory = history
+                        targetEpisode = episode
+                    }
+                }
+            }
+            
+            return if (targetEpisode != null && latestHistory != null) {
+                // 找到了有观看历史的剧集，继续观看
+                ResumePlaybackInfo(
+                    videoUrl = targetEpisode.path ?: "",
+                    title = media.title,
+                    episodeTitle = "第${targetEpisode.episodeNumber}集 ${targetEpisode.title ?: ""}",
+                    mediaId = mediaId,
+                    episodeId = targetEpisode.id,
+                    startPosition = latestHistory.progress
+                )
+            } else {
+                // 没有任何观看历史，播放第一集
+                val firstEpisode = allEpisodes.minByOrNull { it.episodeNumber }
+                if (firstEpisode != null) {
+                    ResumePlaybackInfo(
+                        videoUrl = firstEpisode.path ?: "",
+                        title = media.title,
+                        episodeTitle = "第${firstEpisode.episodeNumber}集 ${firstEpisode.title ?: ""}",
+                        mediaId = mediaId,
+                        episodeId = firstEpisode.id,
+                        startPosition = 0
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+    }
+    
+    /**
+     * 获取指定剧集的播放信息（包含观看历史）
+     */
+    suspend fun getEpisodePlaybackInfo(episodeId: String): EpisodePlaybackInfo? {
+        val mediaId = currentMediaId ?: return null
+        val currentState = _uiState.value as? DetailUiState.Success ?: return null
+        
+        // 找到对应的剧集
+        val episode = allEpisodesBySeason.values.flatten().find { it.id == episodeId }
+            ?: return null
+        
+        // 获取观看历史
+        val history = watchHistoryDao.getWatchHistory(mediaId, episodeId)
+        
+        return EpisodePlaybackInfo(
+            videoUrl = episode.path ?: "",
+            title = currentState.media.title,
+            episodeTitle = "第${episode.episodeNumber}集 ${episode.title ?: ""}",
+            mediaId = mediaId,
+            episodeId = episodeId,
+            startPosition = history?.progress ?: 0
+        )
+    }
+
     fun refreshMetadata(mediaId: String) {
         viewModelScope.launch {
             try {
@@ -408,3 +614,23 @@ class DetailViewModel @Inject constructor(
         }
     }
 }
+
+// 数据类：用于立即播放按钮的播放信息
+data class ResumePlaybackInfo(
+    val videoUrl: String,
+    val title: String,
+    val episodeTitle: String?,
+    val mediaId: String,
+    val episodeId: String?,
+    val startPosition: Long
+)
+
+// 数据类：用于指定剧集播放的信息
+data class EpisodePlaybackInfo(
+    val videoUrl: String,
+    val title: String,
+    val episodeTitle: String?,
+    val mediaId: String,
+    val episodeId: String?,
+    val startPosition: Long
+)

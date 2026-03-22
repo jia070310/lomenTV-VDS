@@ -5,6 +5,8 @@ import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.dao.WatchHistoryDao
 import com.lomen.tv.data.local.database.entity.WatchHistoryEntity
+import com.lomen.tv.domain.model.isLocalEpisodicSeries
+import com.lomen.tv.data.scraper.TmdbScraper
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -20,6 +22,7 @@ class WatchHistoryService @Inject constructor(
     private val webDavMediaDao: WebDavMediaDao,
     private val episodeDao: EpisodeDao
 ) {
+    private val tmdbScraper = TmdbScraper.getInstance()
     
     // 内存缓存
     private var cachedWatchHistory: List<WatchHistoryItem>? = null
@@ -240,6 +243,11 @@ class WatchHistoryService @Inject constructor(
     }
 
     /**
+     * 获取全部观看记录累计播放时长（毫秒）
+     */
+    fun getTotalWatchTimeMs(): Flow<Long> = watchHistoryDao.getTotalWatchTimeMs()
+
+    /**
      * 清除缓存（当观看历史变化时调用）
      */
     fun clearCache() {
@@ -354,11 +362,23 @@ class WatchHistoryService @Inject constructor(
         
         if (movie != null) {
             // 如果是电视剧且有剧集ID，获取剧集路径
-            if (episodeId != null && movie.type == com.lomen.tv.domain.model.MediaType.TV_SHOW) {
+            if (episodeId != null && movie.type.isLocalEpisodicSeries()) {
                 val episode = episodeDao.getEpisodeById(episodeId)
                 videoPath = episode?.quarkPath ?: movie.quarkPath
                 title = movie.title
-                episodeTitle = episode?.let { "第${it.episodeNumber}集 ${it.title ?: ""}" }
+                episodeTitle = episode?.let {
+                    val localSubtitle = it.title?.trim()?.takeIf { subtitle -> subtitle.isNotBlank() }
+                    val tmdbSubtitle = if (localSubtitle == null) {
+                        resolveTmdbEpisodeSubtitle(
+                            tmdbId = movie.tmdbId?.toString(),
+                            seasonNumber = it.seasonNumber,
+                            episodeNumber = it.episodeNumber
+                        )
+                    } else {
+                        null
+                    }
+                    buildEpisodeTitle(it.episodeNumber, localSubtitle ?: tmdbSubtitle)
+                }
             } else {
                 videoPath = movie.quarkPath
                 title = movie.title
@@ -408,8 +428,17 @@ class WatchHistoryService @Inject constructor(
             
             // 只使用本地数据，不调用网络请求
             episodeTitle = if (episodeNumber != null) {
-                // 只显示集数，不使用网络获取的标题
-                "第${episodeNumber}集"
+                val localSubtitle = extractWebDavEpisodeSubtitle(targetWebDavMedia.title)
+                val tmdbSubtitle = if (localSubtitle == null) {
+                    resolveTmdbEpisodeSubtitle(
+                        tmdbId = targetWebDavMedia.tmdbId,
+                        seasonNumber = seasonNumber,
+                        episodeNumber = episodeNumber
+                    )
+                } else {
+                    null
+                }
+                buildEpisodeTitle(episodeNumber, localSubtitle ?: tmdbSubtitle)
             } else null
             
             android.util.Log.d("WatchHistoryService", "getPlaybackInfo for WebDAV: mediaId=$mediaId, episodeId=$episodeId, targetMediaId=$targetMediaId, episodeNumber=$episodeNumber, seasonNumber=$seasonNumber, title=$title, episodeTitle=$episodeTitle")
@@ -501,6 +530,40 @@ class WatchHistoryService @Inject constructor(
         } else {
             "history_${mediaId}"
         }
+    }
+
+    private fun buildEpisodeTitle(episodeNumber: Int, subtitle: String?): String {
+        val normalizedSubtitle = subtitle
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        return if (normalizedSubtitle != null) {
+            "第${episodeNumber}集 $normalizedSubtitle"
+        } else {
+            "第${episodeNumber}集"
+        }
+    }
+
+    private fun extractWebDavEpisodeSubtitle(mediaTitle: String): String? {
+        if (mediaTitle.isBlank()) return null
+        val match = Regex("第\\d+集\\s*(.+)$").find(mediaTitle) ?: return null
+        val subtitle = match.groupValues.getOrNull(1)?.trim()
+        return subtitle?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun resolveTmdbEpisodeSubtitle(
+        tmdbId: String?,
+        seasonNumber: Int?,
+        episodeNumber: Int?
+    ): String? {
+        if (tmdbId.isNullOrBlank() || seasonNumber == null || episodeNumber == null) return null
+        return runCatching {
+            tmdbScraper
+                .getTvSeasonEpisodes(tmdbId, seasonNumber)
+                ?.firstOrNull { it.episodeNumber == episodeNumber }
+                ?.name
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        }.getOrNull()
     }
 }
 

@@ -9,7 +9,7 @@ class TmdbScraperTest {
 
     @Test
     fun testSearchTv() = runBlocking {
-        val scraper = TmdbScraper()
+        val scraper = TmdbScraper.getInstance()
 
         println("=== 测试TMDB刮削: 太平年 ===")
 
@@ -38,7 +38,7 @@ class TmdbScraperTest {
 
     @Test
     fun testSearchMovie() = runBlocking {
-        val scraper = TmdbScraper()
+        val scraper = TmdbScraper.getInstance()
 
         println("=== 测试TMDB刮削: 流浪地球 ===")
 

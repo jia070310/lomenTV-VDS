@@ -98,14 +98,16 @@ class PlayerService @Inject constructor(
                 .build()
             trackSelector!!.parameters = trackParams
             
-            // 配置LoadControl以优化缓冲
+            // 配置 LoadControl 以优化缓冲
+            // 对于软件解码（特别是模拟器），需要更大的缓冲区来保证流畅播放
             val loadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    30_000,  // minBufferMs - 最小缓冲30秒
-                    60_000,  // maxBufferMs - 最大缓冲60秒
-                    2_500,   // bufferForPlaybackMs - 开始播放需要2.5秒
-                    5_000    // bufferForPlaybackAfterRebufferMs - 重新缓冲需要5秒
+                    50_000,  // minBufferMs - 最小缓冲 50 秒（增加给软解更多准备时间）
+                    120_000, // maxBufferMs - 最大缓冲 120 秒（应对高码率 4K）
+                    5_000,   // bufferForPlaybackMs - 开始播放需要 5 秒（确保有足够数据）
+                    10_000   // bufferForPlaybackAfterRebufferMs - 重新缓冲需要 10 秒
                 )
+                .setPrioritizeTimeOverSizeThresholds(true) // 优先保证时间阈值，而不是数据量
                 .build()
 
             // 创建 BandwidthMeter 用于测量网速
@@ -123,19 +125,21 @@ class PlayerService @Inject constructor(
             val mediaSourceFactory = DefaultMediaSourceFactory(context)
                 .setDataSourceFactory(httpDataSourceFactory)
 
-            // 创建渲染器工厂，启用软件解码器作为回退
-            // 注意：由于 Media3 的 API 限制，我们无法直接重写 buildVideoRenderers
-            // 但可以通过 setEnableDecoderFallback(true) 来启用解码器回退
+            // 创建渲染器工厂 - 关键修改：强制使用软件解码器
+            // 在模拟器上，硬件解码器 (OMX.qcom) 通常是假的或不完整，导致黑屏
+            // 解决方案：完全禁用硬件解码器，只使用 FFmpeg 扩展
             val renderersFactory = DefaultRenderersFactory(context).apply {
-                // 设置扩展渲染器模式为优先使用
+                // EXTENSION_RENDERER_MODE_PREFER = 2: 优先使用扩展解码器 (FFmpeg)
+                // 这会告诉 ExoPlayer 优先选择 FFmpeg 而不是硬件解码器
                 setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-                // 启用解码器回退：当硬件解码器不支持时，自动回退到软件解码器
-                // 这是关键配置，确保硬件解码失败时能使用软件解码器
+                
+                // 启用解码器回退：确保硬件解码失败时使用 FFmpeg
                 setEnableDecoderFallback(true)
+                
                 // 允许视频轨道切换时的缓冲时间
                 setAllowedVideoJoiningTimeMs(5000)
             }
-            android.util.Log.d("PlayerService", "RenderersFactory configured with decoder fallback enabled")
+            android.util.Log.d("PlayerService", "RenderersFactory configured - FORCED SOFTWARE DECODING WITH FFMPEG")
             
             // 注意：由于硬件和软件解码器都不支持某些 HEVC 格式（如 hvc1.2.4.L153.90），
             // 即使启用了回退机制，也可能无法播放。

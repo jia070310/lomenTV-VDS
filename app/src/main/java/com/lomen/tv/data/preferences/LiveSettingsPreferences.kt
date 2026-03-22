@@ -37,7 +37,11 @@ class LiveSettingsPreferences @Inject constructor(
         val EPG_URL_HISTORY = stringPreferencesKey("epg_url_history")
         val USER_AGENT_HISTORY = stringPreferencesKey("user_agent_history")
         val VIDEO_ASPECT_RATIO = intPreferencesKey("video_aspect_ratio")
-        val AUTO_REFRESH_INTERVAL = intPreferencesKey("auto_refresh_interval") // 小时，0表示禁用
+        val AUTO_REFRESH_INTERVAL = intPreferencesKey("auto_refresh_interval") // 小时，0 表示禁用
+                
+        // 记忆播放位置
+        val LAST_PLAYED_CHANNEL_NAME = stringPreferencesKey("last_played_channel_name")
+        val LAST_PLAYED_CHANNEL_URL_IDX = intPreferencesKey("last_played_channel_url_idx")
         
         // 默认直播源
         const val DEFAULT_LIVE_SOURCE_URL = "https://gh-proxy.org/https://github.com/jia070310/lemonTV/blob/main/iptv-fe.m3u"
@@ -421,5 +425,29 @@ class LiveSettingsPreferences @Inject constructor(
         dataStore.edit { preferences ->
             preferences[AUTO_REFRESH_INTERVAL] = hours
         }
+    }
+
+    /**
+     * 保存上次播放的频道信息
+     */
+    suspend fun saveLastPlayedChannel(channelName: String, urlIdx: Int) {
+        dataStore.edit { preferences ->
+            preferences[LAST_PLAYED_CHANNEL_NAME] = channelName
+            preferences[LAST_PLAYED_CHANNEL_URL_IDX] = urlIdx
+        }
+    }
+
+    /**
+     * 获取上次播放的频道名称
+     */
+    val lastPlayedChannelName: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[LAST_PLAYED_CHANNEL_NAME]
+    }
+
+    /**
+     * 获取上次播放的频道线路索引
+     */
+    val lastPlayedChannelUrlIdx: Flow<Int> = dataStore.data.map { preferences ->
+        preferences[LAST_PLAYED_CHANNEL_URL_IDX] ?: 0
     }
 }

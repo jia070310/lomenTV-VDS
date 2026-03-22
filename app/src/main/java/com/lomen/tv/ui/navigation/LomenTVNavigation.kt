@@ -232,14 +232,15 @@ fun LomenTVNavigation(
                 onNavigateBack = {
                     navController.popBackStack()
                 },
-                onPlayClick = { videoUrl, title, episodeTitle, mediaId, episodeId ->
-                    // 启动播放器Activity
+                onPlayClick = { videoUrl, title, episodeTitle, mediaId, episodeId, startPosition ->
+                    // 启动播放器 Activity
                     val intent = Intent(context, PlayerActivity::class.java).apply {
                         putExtra(PlayerActivity.EXTRA_VIDEO_URL, videoUrl)
                         putExtra(PlayerActivity.EXTRA_TITLE, title)
                         putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, episodeTitle)
                         putExtra(PlayerActivity.EXTRA_MEDIA_ID, mediaId)
                         putExtra(PlayerActivity.EXTRA_EPISODE_ID, episodeId)
+                        putExtra(PlayerActivity.EXTRA_START_POSITION, startPosition)
                     }
                     context.startActivity(intent)
                 }

@@ -3,6 +3,7 @@ package com.lomen.tv.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.lomen.tv.data.scraper.FolderSeriesNameParser
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
 import com.lomen.tv.data.repository.ResourceLibraryRepository
@@ -49,11 +50,14 @@ class ResourceLibraryViewModel @Inject constructor(
     private val _tvShows = MutableStateFlow<List<TvShowSeries>>(emptyList())
     val tvShows: StateFlow<List<TvShowSeries>> = _tvShows.asStateFlow()
 
+    private val _anime = MutableStateFlow<List<TvShowSeries>>(emptyList())
+    val anime: StateFlow<List<TvShowSeries>> = _anime.asStateFlow()
+
     private val _concerts = MutableStateFlow<List<WebDavMediaEntity>>(emptyList())
     val concerts: StateFlow<List<WebDavMediaEntity>> = _concerts.asStateFlow()
 
-    private val _variety = MutableStateFlow<List<WebDavMediaEntity>>(emptyList())
-    val variety: StateFlow<List<WebDavMediaEntity>> = _variety.asStateFlow()
+    private val _variety = MutableStateFlow<List<TvShowSeries>>(emptyList())
+    val variety: StateFlow<List<TvShowSeries>> = _variety.asStateFlow()
 
     private val _documentaries = MutableStateFlow<List<WebDavMediaEntity>>(emptyList())
     val documentaries: StateFlow<List<WebDavMediaEntity>> = _documentaries.asStateFlow()
@@ -111,51 +115,45 @@ class ResourceLibraryViewModel @Inject constructor(
                             val categorized = media.map { mediaItem ->
                                 val titleLower = mediaItem.title.lowercase()
                                 val genresLower = (mediaItem.genres ?: "").lowercase()
-                                val hasEpisode = mediaItem.seasonNumber != null || mediaItem.episodeNumber != null
+                                val isAnimeByKeyword =
+                                    titleLower.contains("动漫") ||
+                                        titleLower.contains("动画") ||
+                                        titleLower.contains("番剧") ||
+                                        titleLower.contains("anime") ||
+                                        genresLower.contains("animation") ||
+                                        genresLower.contains("anime")
 
-                                val category = when {
-                                    // 有季/集信息：优先视为TV相关
-                                    hasEpisode || mediaItem.type == com.lomen.tv.domain.model.MediaType.TV_SHOW -> {
+                                // 优先采用刮削/目录写入的 [MediaType]，避免「纪录片目录 + TMDB 判成剧」在首页被标题关键词二次误判
+                                val category = when (mediaItem.type) {
+                                    com.lomen.tv.domain.model.MediaType.ANIME ->
+                                        com.lomen.tv.domain.model.MediaType.ANIME
+                                    com.lomen.tv.domain.model.MediaType.VARIETY ->
+                                        com.lomen.tv.domain.model.MediaType.VARIETY
+                                    com.lomen.tv.domain.model.MediaType.DOCUMENTARY ->
+                                        com.lomen.tv.domain.model.MediaType.DOCUMENTARY
+                                    com.lomen.tv.domain.model.MediaType.CONCERT ->
+                                        com.lomen.tv.domain.model.MediaType.CONCERT
+                                    com.lomen.tv.domain.model.MediaType.MOVIE ->
+                                        com.lomen.tv.domain.model.MediaType.MOVIE
+                                    com.lomen.tv.domain.model.MediaType.OTHER ->
+                                        com.lomen.tv.domain.model.MediaType.OTHER
+                                    com.lomen.tv.domain.model.MediaType.TV_SHOW -> {
                                         when {
-                                            // 综艺/真人秀
+                                            isAnimeByKeyword ->
+                                                com.lomen.tv.domain.model.MediaType.ANIME
                                             titleLower.contains("综艺") ||
                                                 titleLower.contains("真人秀") ||
                                                 titleLower.contains("脱口秀") ||
                                                 titleLower.contains("选秀") ||
                                                 genresLower.contains("variety") ||
-                                                genresLower.contains("reality") -> {
+                                                genresLower.contains("reality") ->
                                                 com.lomen.tv.domain.model.MediaType.VARIETY
-                                            }
-                                            // 纪录片剧集
                                             titleLower.contains("纪录片") ||
                                                 titleLower.contains("纪录") ||
-                                                genresLower.contains("documentary") -> {
+                                                genresLower.contains("documentary") ->
                                                 com.lomen.tv.domain.model.MediaType.DOCUMENTARY
-                                            }
-                                            else -> com.lomen.tv.domain.model.MediaType.TV_SHOW
-                                        }
-                                    }
-                                    // 无季/集信息：电影/演唱会/纪录片电影
-                                    else -> {
-                                        when {
-                                            // 演唱会 / 音乐会
-                                            titleLower.contains("演唱会") ||
-                                                titleLower.contains("巡回演唱") ||
-                                                (genresLower.contains("music") &&
-                                                    (titleLower.contains("live") || titleLower.contains("concert"))) -> {
-                                                com.lomen.tv.domain.model.MediaType.CONCERT
-                                            }
-                                            // 纪录片电影
-                                            titleLower.contains("纪录片") ||
-                                                titleLower.contains("纪录") ||
-                                                genresLower.contains("documentary") -> {
-                                                com.lomen.tv.domain.model.MediaType.DOCUMENTARY
-                                            }
-                                            // 普通电影
-                                            mediaItem.type == com.lomen.tv.domain.model.MediaType.MOVIE -> {
-                                                com.lomen.tv.domain.model.MediaType.MOVIE
-                                            }
-                                            else -> com.lomen.tv.domain.model.MediaType.OTHER
+                                            else ->
+                                                com.lomen.tv.domain.model.MediaType.TV_SHOW
                                         }
                                     }
                                 }
@@ -167,9 +165,10 @@ class ResourceLibraryViewModel @Inject constructor(
                             _movies.value = categorized
                                 .filter { it.second == com.lomen.tv.domain.model.MediaType.MOVIE }
                                 .map { it.first }
-                            _variety.value = categorized
+                            val varietyList = categorized
                                 .filter { it.second == com.lomen.tv.domain.model.MediaType.VARIETY }
                                 .map { it.first }
+                            _variety.value = groupVarietyByShow(varietyList)
                             _concerts.value = categorized
                                 .filter { it.second == com.lomen.tv.domain.model.MediaType.CONCERT }
                                 .map { it.first }
@@ -179,6 +178,12 @@ class ResourceLibraryViewModel @Inject constructor(
                             _others.value = categorized
                                 .filter { it.second == com.lomen.tv.domain.model.MediaType.OTHER }
                                 .map { it.first }
+
+                            // 动漫：按系列分组（与电视剧一致）
+                            val animeList = categorized
+                                .filter { it.second == com.lomen.tv.domain.model.MediaType.ANIME }
+                                .map { it.first }
+                            _anime.value = groupTvShowsBySeries(animeList)
                             
                             // 电视剧：合并同一部剧的集数（仅 TV_SHOW 分类）
                             val tvShowList = categorized
@@ -186,7 +191,7 @@ class ResourceLibraryViewModel @Inject constructor(
                                 .map { it.first }
                             _tvShows.value = groupTvShowsBySeries(tvShowList)
                             
-                            Log.d(TAG, "Movies: ${_movies.value.size}, TV Shows: ${_tvShows.value.size}, " +
+                            Log.d(TAG, "Movies: ${_movies.value.size}, TV Shows: ${_tvShows.value.size}, Anime: ${_anime.value.size}, " +
                                     "Concerts: ${_concerts.value.size}, Variety: ${_variety.value.size}, " +
                                     "Documentaries: ${_documentaries.value.size}, Others: ${_others.value.size}")
                         }
@@ -196,6 +201,7 @@ class ResourceLibraryViewModel @Inject constructor(
                     _currentLibraryMedia.value = emptyList()
                     _movies.value = emptyList()
                     _tvShows.value = emptyList()
+                    _anime.value = emptyList()
                     _concerts.value = emptyList()
                     _variety.value = emptyList()
                     _documentaries.value = emptyList()
@@ -283,8 +289,42 @@ class ResourceLibraryViewModel @Inject constructor(
                 rating = firstEpisode.rating,
                 overview = firstEpisode.overview,
                 episodes = episodes.sortedBy { it.episodeNumber },  // 按集数排序
-                episodeCount = episodes.size
+                // 采用“已更新到第X集”的口径：优先最大集号，缺失时回退数量
+                episodeCount = episodes.mapNotNull { it.episodeNumber }.maxOrNull() ?: episodes.size
             )
         }.sortedByDescending { it.episodeCount }  // 按集数排序，集数多的在前
+    }
+
+    /**
+     * 综艺：同一节目多季合并为一张卡片与同一详情入口；季与分集在详情页切换。
+     * 分组键为去掉季标记后的节目名；入口 id 取按季、集排序后的首条真实 [WebDavMediaEntity.id]。
+     */
+    private fun groupVarietyByShow(items: List<WebDavMediaEntity>): List<TvShowSeries> {
+        if (items.isEmpty()) return emptyList()
+        val grouped = items.groupBy { entity ->
+            FolderSeriesNameParser.stripAllSeasonMarkers(entity.title.trim()).ifBlank { entity.title.trim() }
+        }
+        return grouped.map { (canonicalTitle, episodes) ->
+            val sorted = episodes.sortedWith(
+                compareBy<WebDavMediaEntity> { it.seasonNumber ?: 0 }
+                    .thenBy { it.episodeNumber ?: Int.MAX_VALUE }
+            )
+            val withPoster = sorted.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: sorted.first()
+            val bestRated = sorted.maxWithOrNull(
+                compareBy<WebDavMediaEntity> { it.rating ?: 0f }.thenByDescending { it.updatedAt }
+            ) ?: sorted.first()
+            TvShowSeries(
+                id = sorted.first().id,
+                title = canonicalTitle,
+                posterUrl = withPoster.posterUrl,
+                year = withPoster.year ?: bestRated.year,
+                rating = bestRated.rating,
+                overview = bestRated.overview ?: withPoster.overview,
+                episodes = sorted,
+                episodeCount = sorted.size
+            )
+        }.sortedByDescending { series ->
+            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+        }
     }
 }

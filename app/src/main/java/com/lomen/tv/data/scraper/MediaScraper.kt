@@ -57,15 +57,15 @@ class MediaScraper {
     suspend fun scrapeSingleFile(file: WebDavFile): ScrapedMedia? {
         // 提取媒体信息
         val parentFolder = file.path.substringBeforeLast("/", "").substringAfterLast("/", "")
-        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder)
+        val mediaInfo = MediaInfoExtractor.extract(file.name, parentFolder, file.path)
         
         Log.d(TAG, "Scraping: ${mediaInfo.title}, year: ${mediaInfo.year}, type: ${mediaInfo.type}")
         
         // 核心原则：根据类型决定搜索TMDB的哪个表
-        // TV_SHOW, VARIETY → 搜索tv表
+        // TV_SHOW, ANIME, VARIETY → 搜索tv表
         // MOVIE, CONCERT, DOCUMENTARY, OTHER → 搜索movie表
         val tmdbResult = when (mediaInfo.type) {
-            MediaType.TV_SHOW, MediaType.VARIETY -> {
+            MediaType.TV_SHOW, MediaType.ANIME, MediaType.VARIETY -> {
                 tmdbScraper.searchTv(mediaInfo.title, mediaInfo.year)
             }
             MediaType.MOVIE, MediaType.CONCERT, MediaType.DOCUMENTARY, MediaType.OTHER -> {

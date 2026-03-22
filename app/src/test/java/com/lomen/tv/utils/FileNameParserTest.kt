@@ -12,7 +12,10 @@ class FileNameParserTest {
             "The.Matrix.1999.1080p.BluRay.x264.mp4" to Pair("The Matrix", 1999),
             "Inception (2010) [1080p].mkv" to Pair("Inception", 2010),
             "Avatar.2009.Extended.Cut.1080p.mp4" to Pair("Avatar", 2009),
-            "盗梦空间.2010.HD国语中字.mp4" to Pair("盗梦空间", 2010)
+            "盗梦空间.2010.HD国语中字.mp4" to Pair("盗梦空间", 2010),
+            "肖申克的救赎 (1994).mkv" to Pair("肖申克的救赎", 1994),
+            "周处除三害 (2023).mp4" to Pair("周处除三害", 2023),
+            "【高清网发布www.xxx.com】万界独尊.2022.mp4" to Pair("万界独尊", 2022)
         )
 
         testCases.forEach { (filename, expected) ->
@@ -35,7 +38,9 @@ class FileNameParserTest {
         val testCases = listOf(
             TvTestCase("Game.of.Thrones.S01E01.1080p.mkv", "Game of Thrones", 1, 1),
             TvTestCase("Breaking.Bad.S05E14.720p.mp4", "Breaking Bad", 5, 14),
-            TvTestCase("The.Mandalorian.S02E08.mkv", "The Mandalorian", 2, 8)
+            TvTestCase("The.Mandalorian.S02E08.mkv", "The Mandalorian", 2, 8),
+            TvTestCase("甄嬛传 S01E01.mp4", "甄嬛传", 1, 1),
+            TvTestCase("Friends S03E10.mkv", "Friends", 3, 10)
         )
 
         testCases.forEach { (filename, expectedTitle, expectedSeason, expectedEpisode) ->
@@ -44,6 +49,24 @@ class FileNameParserTest {
             assertEquals("Season mismatch", expectedSeason, result.season)
             assertEquals("Episode mismatch", expectedEpisode, result.episode)
             assertEquals("Type should be TV_SHOW", MediaType.TV_SHOW, result.type)
+        }
+    }
+
+    @Test
+    fun `test variety leading episode number with dot`() {
+        val cases = listOf(
+            "01. 师徒.mp4" to Pair(1, "师徒"),
+            "04. 音乐.mp4" to Pair(4, "音乐"),
+            "12．标题.mkv" to Pair(12, "标题"),
+            // 空格分隔（优酷类综艺常见）
+            "01 出身：家世决定你多少.mp4" to Pair(1, "出身：家世决定你多少"),
+            "02 高潜：你被团队友坑过吗.mp4" to Pair(2, "高潜：你被团队友坑过吗")
+        )
+        for ((filename, expected) in cases) {
+            val result = FileNameParser.parse(filename)
+            assertEquals("episode for $filename", expected.first, result.episode)
+            assertEquals("title for $filename", expected.second, result.title)
+            assertEquals(MediaType.TV_SHOW, result.type)
         }
     }
 
@@ -130,6 +153,39 @@ class FileNameParserTest {
         assertEquals("Friends", result.title)
         assertEquals(1, result.season)
         assertEquals(5, result.episode)
+    }
+
+    @Test
+    fun `test season episode variants and specials`() {
+        val seasonEpisodeDot = FileNameParser.parse("Westworld.season.1.episode.1.mkv")
+        assertEquals("Westworld", seasonEpisodeDot.title)
+        assertEquals(1, seasonEpisodeDot.season)
+        assertEquals(1, seasonEpisodeDot.episode)
+        assertEquals(MediaType.TV_SHOW, seasonEpisodeDot.type)
+
+        val special = FileNameParser.parse("某科学的超电磁炮 S00E01.mkv")
+        assertEquals("某科学的超电磁炮", special.title)
+        assertEquals(0, special.season)
+        assertEquals(1, special.episode)
+        assertEquals(MediaType.TV_SHOW, special.type)
+    }
+
+    @Test
+    fun `test multi episode range format`() {
+        val result = FileNameParser.parse("剧名.S01E01-E04.mkv")
+        assertEquals("剧名", result.title)
+        assertEquals(1, result.season)
+        assertEquals(1, result.episode)
+        assertEquals(MediaType.TV_SHOW, result.type)
+    }
+
+    @Test
+    fun `test numeric prefix as episode`() {
+        val result = FileNameParser.parse("01 4K.国&粤.mp4")
+        assertEquals("国&粤", result.title)
+        assertNull(result.season)
+        assertEquals(1, result.episode)
+        assertEquals(MediaType.TV_SHOW, result.type)
     }
 
     @Test

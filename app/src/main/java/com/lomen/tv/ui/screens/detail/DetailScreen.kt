@@ -1,7 +1,11 @@
 package com.lomen.tv.ui.screens.detail
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +20,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.tv.foundation.PivotOffsets
 import androidx.tv.foundation.lazy.list.TvLazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -34,10 +37,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -69,13 +77,23 @@ import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+private fun MediaType.usesEpisodeDetailLayout(): Boolean =
+    this == MediaType.TV_SHOW ||
+        this == MediaType.VARIETY ||
+        this == MediaType.ANIME ||
+        this == MediaType.DOCUMENTARY
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun DetailScreen(
     mediaId: String,
     onNavigateBack: () -> Unit,
-    onPlayClick: (videoUrl: String, title: String, episodeTitle: String?, mediaId: String, episodeId: String?) -> Unit,
+    onPlayClick: (videoUrl: String, title: String, episodeTitle: String?, mediaId: String, episodeId: String?, startPosition: Long) -> Unit,
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -125,7 +143,8 @@ fun DetailScreen(
                     availableSeasons = availableSeasons,
                     onSeasonSelected = { viewModel.selectSeason(it) },
                     onNavigateBack = onNavigateBack,
-                    onPlayClick = onPlayClick
+                    onPlayClick = onPlayClick,
+                    viewModel = viewModel
                 )
             }
         }
@@ -142,14 +161,17 @@ private fun DetailContent(
     availableSeasons: List<Int>,
     onSeasonSelected: (Int) -> Unit,
     onNavigateBack: () -> Unit,
-    onPlayClick: (videoUrl: String, title: String, episodeTitle: String?, mediaId: String, episodeId: String?) -> Unit
+    onPlayClick: (videoUrl: String, title: String, episodeTitle: String?, mediaId: String, episodeId: String?, startPosition: Long) -> Unit,
+    viewModel: DetailViewModel
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = if (media.type == MediaType.TV_SHOW) {
+    val tabs = if (media.type.usesEpisodeDetailLayout()) {
         listOf("剧集", "简介", "演职人员")
     } else {
         listOf("简介", "演职人员")
     }
+    val tabFocusRequesters = remember(tabs) { List(tabs.size) { FocusRequester() } }
+    val activeTabFocusRequester = tabFocusRequesters.getOrElse(selectedTab) { tabFocusRequesters.first() }
 
     TvLazyColumn(
         modifier = Modifier.fillMaxSize()
@@ -161,22 +183,24 @@ private fun DetailContent(
                 episodes = episodes,
                 selectedSeason = selectedSeason,
                 availableSeasons = availableSeasons,
+                currentTabFocusRequester = activeTabFocusRequester,
                 onSeasonSelected = onSeasonSelected,
                 onNavigateBack = onNavigateBack,
                 onPlayClick = {
-                    // 立即播放按钮：播放第一集或影片本身
-                    val firstEpisode = episodes.minByOrNull { it.episodeNumber }
-                    val videoUrl = firstEpisode?.path ?: media.path ?: ""
-                    val episodeTitle = if (media.type == MediaType.TV_SHOW && firstEpisode != null) {
-                        "第${firstEpisode.episodeNumber}集 ${firstEpisode.title ?: ""}"
-                    } else null
-                    // 对于 WebDAV 媒体的剧集，使用集数的 id 作为 mediaId
-                    val playMediaId = if (media.type == MediaType.TV_SHOW && firstEpisode != null) {
-                        firstEpisode.id
-                    } else {
-                        media.id
+                    // 立即播放按钮：根据观看历史决定播放位置
+                    CoroutineScope(Dispatchers.Main).launch {
+                        val playbackInfo = viewModel.getResumePlaybackInfo()
+                        if (playbackInfo != null) {
+                            onPlayClick(
+                                playbackInfo.videoUrl,
+                                playbackInfo.title,
+                                playbackInfo.episodeTitle,
+                                playbackInfo.mediaId,
+                                playbackInfo.episodeId,
+                                playbackInfo.startPosition
+                            )
+                        }
                     }
-                    onPlayClick(videoUrl, media.title, episodeTitle, playMediaId, null)
                 }
             )
         }
@@ -201,7 +225,8 @@ private fun DetailContent(
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = selectedTab == index,
-                        onFocus = { selectedTab = index }
+                        onFocus = { selectedTab = index },
+                        modifier = Modifier.focusRequester(tabFocusRequesters[index])
                     ) {
                         Text(
                             text = title,
@@ -217,42 +242,41 @@ private fun DetailContent(
         // Content based on selected tab
         when (selectedTab) {
             0 -> {
-                if (media.type == MediaType.TV_SHOW) {
+                if (media.type.usesEpisodeDetailLayout()) {
                     // Episodes
                     item {
                         EpisodesSection(
                             episodes = episodes,
                             totalEpisodes = media.totalEpisodes,
+                            tabFocusRequester = activeTabFocusRequester,
                             onEpisodeClick = { episode ->
-                                val videoUrl = episode.path ?: ""
-                                // 确保集数信息正确显示
-                                // 如果 episode.title 包含剧集名，只提取集数相关的标题部分
-                                val episodeTitle = if (episode.episodeNumber != null) {
-                                    val episodeTitleText = episode.title?.trim() ?: ""
-                                    // 如果 episode.title 包含剧集名（和 media.title 相同），则只显示集数
-                                    if (episodeTitleText == media.title || episodeTitleText.isEmpty()) {
-                                        "第${episode.episodeNumber}集"
-                                    } else {
-                                        // 否则显示集数和标题
-                                        "第${episode.episodeNumber}集 $episodeTitleText"
-                                    }
-                                } else {
-                                    // 如果没有集数，使用 episode.title（去除可能的剧集名）
-                                    val episodeTitleText = episode.title?.trim() ?: ""
-                                    if (episodeTitleText == media.title) {
-                                        "" // 如果标题和剧集名相同，返回空字符串
-                                    } else {
-                                        episodeTitleText
+                                // 点击剧集时，获取该集的观看历史
+                                CoroutineScope(Dispatchers.Main).launch {
+                                    val playbackInfo = viewModel.getEpisodePlaybackInfo(episode.id)
+                                    if (playbackInfo != null) {
+                                        val videoUrl = playbackInfo.videoUrl
+                                        // 确保集数信息正确显示
+                                        val episodeTitleText = episode.title?.trim() ?: ""
+                                        val displayEpisodeTitle = if (episode.episodeNumber != null) {
+                                            if (episodeTitleText == media.title || episodeTitleText.isEmpty()) {
+                                                "第${episode.episodeNumber}集"
+                                            } else {
+                                                "第${episode.episodeNumber}集 $episodeTitleText"
+                                            }
+                                        } else {
+                                            episodeTitleText
+                                        }
+                                        android.util.Log.d("DetailScreen", "Playing episode: title=$displayEpisodeTitle, media.title=${media.title}, episode.title=${episode.title}, startPosition=${playbackInfo.startPosition}")
+                                        onPlayClick(
+                                            videoUrl,
+                                            media.title,
+                                            displayEpisodeTitle,
+                                            playbackInfo.mediaId,
+                                            playbackInfo.episodeId,
+                                            playbackInfo.startPosition
+                                        )
                                     }
                                 }
-                                // 对于 WebDAV 媒体的剧集，使用集数的 id 作为 mediaId
-                                val playMediaId = if (media.type == MediaType.TV_SHOW) {
-                                    episode.id
-                                } else {
-                                    media.id
-                                }
-                                android.util.Log.d("DetailScreen", "Playing episode: title=$episodeTitle, media.title=${media.title}, episode.title=${episode.title}")
-                                onPlayClick(videoUrl, media.title, episodeTitle, playMediaId, null)
                             }
                         )
                     }
@@ -264,7 +288,7 @@ private fun DetailContent(
                 }
             }
             1 -> {
-                if (media.type == MediaType.TV_SHOW) {
+                if (media.type.usesEpisodeDetailLayout()) {
                     // Overview for TV show
                     item {
                         OverviewSection(overview = media.overview)
@@ -272,14 +296,20 @@ private fun DetailContent(
                 } else {
                     // Cast for movie
                     item {
-                        CastSection(cast = cast)
+                        CastSection(
+                            cast = cast,
+                            tabFocusRequester = activeTabFocusRequester
+                        )
                     }
                 }
             }
             2 -> {
                 // Cast for TV show
                 item {
-                    CastSection(cast = cast)
+                    CastSection(
+                        cast = cast,
+                        tabFocusRequester = activeTabFocusRequester
+                    )
                 }
             }
         }
@@ -305,12 +335,25 @@ private fun HeroSection(
     episodes: List<EpisodeItem>,
     selectedSeason: Int,
     availableSeasons: List<Int>,
+    currentTabFocusRequester: FocusRequester,
     onSeasonSelected: (Int) -> Unit,
     onNavigateBack: () -> Unit,
     onPlayClick: () -> Unit
 ) {
     // 季数下拉菜单状态
     var showSeasonDropdown by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val seasonTriggerFocusRequester = remember { FocusRequester() }
+    val dismissSeasonMenu: () -> Unit = {
+        showSeasonDropdown = false
+        scope.launch {
+            delay(32)
+            seasonTriggerFocusRequester.requestFocus()
+        }
+    }
+    BackHandler(enabled = showSeasonDropdown) {
+        dismissSeasonMenu()
+    }
 
     // Backdrop Section with Back Button overlay
     Box(
@@ -428,9 +471,13 @@ private fun HeroSection(
                     )
                     Spacer(modifier = Modifier.width(16.dp))
 
-                    if (media.type == MediaType.TV_SHOW) {
-                        // 优先显示TMDB总集数，否则显示当前加载的集数
-                        val episodeCount = media.totalEpisodes ?: episodes.size
+                    if (media.type.usesEpisodeDetailLayout()) {
+                    // 最大集号（集号缺失或全被误标为 1 时，用本季条数兜底）
+                    val latestEpisode = if (episodes.isEmpty()) 0 else maxOf(
+                        episodes.maxOfOrNull { it.episodeNumber } ?: 0,
+                        episodes.size
+                    )
+                    val episodeCount = media.totalEpisodes ?: latestEpisode
                         Text(
                             text = "共${episodeCount}集",
                             style = MaterialTheme.typography.bodyMedium,
@@ -482,7 +529,7 @@ private fun HeroSection(
                         )
                     }
 
-                    if (media.type == MediaType.TV_SHOW && availableSeasons.size > 1) {
+                    if (media.type.usesEpisodeDetailLayout() && availableSeasons.size > 1) {
                         // 多季显示下拉选择器
                         Box {
                             Button(
@@ -497,6 +544,10 @@ private fun HeroSection(
                                 ),
                                 shape = ButtonDefaults.shape(shape = RoundedCornerShape(24.dp)),
                                 modifier = Modifier
+                                    .focusRequester(seasonTriggerFocusRequester)
+                                    .focusProperties {
+                                        down = currentTabFocusRequester
+                                    }
                                     .padding(horizontal = 16.dp, vertical = 8.dp)
                             ) {
                                 Text(
@@ -518,15 +569,12 @@ private fun HeroSection(
                                 SeasonDropdownMenu(
                                     availableSeasons = availableSeasons,
                                     selectedSeason = selectedSeason,
-                                    onSeasonSelected = { season ->
-                                        onSeasonSelected(season)
-                                        showSeasonDropdown = false
-                                    },
-                                    onDismiss = { showSeasonDropdown = false }
+                                    onSeasonSelected = onSeasonSelected,
+                                    onDismissMenu = dismissSeasonMenu
                                 )
                             }
                         }
-                    } else if (media.type == MediaType.TV_SHOW) {
+                    } else if (media.type.usesEpisodeDetailLayout()) {
                         // 单季显示固定标签
                         Button(
                             onClick = {},
@@ -540,6 +588,9 @@ private fun HeroSection(
                             ),
                             shape = ButtonDefaults.shape(shape = RoundedCornerShape(24.dp)),
                             modifier = Modifier
+                                .focusProperties {
+                                    down = currentTabFocusRequester
+                                }
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
                             Text(
@@ -561,6 +612,7 @@ private fun HeroSection(
 private fun EpisodesSection(
     episodes: List<EpisodeItem>,
     totalEpisodes: Int?,  // 总集数
+    tabFocusRequester: FocusRequester,
     onEpisodeClick: (EpisodeItem) -> Unit
 ) {
     Column(
@@ -581,10 +633,14 @@ private fun EpisodesSection(
                 style = MaterialTheme.typography.headlineSmall,
                 color = TextPrimary
             )
+            val latestEpisode = if (episodes.isEmpty()) 0 else maxOf(
+                episodes.maxOfOrNull { it.episodeNumber } ?: 0,
+                episodes.size
+            )
             val episodeText = if (totalEpisodes != null) {
-                "更新至 ${episodes.size} 集 / 全集 $totalEpisodes 集"
+                "更新至 ${latestEpisode} 集 / 全集 $totalEpisodes 集"
             } else {
-                "更新至 ${episodes.size} 集 / 全集"
+                "更新至 ${latestEpisode} 集 / 全集"
             }
             Text(
                 text = episodeText,
@@ -605,6 +661,7 @@ private fun EpisodesSection(
             items(sortedEpisodes) {
                 EpisodeCard(
                     episode = it,
+                    tabFocusRequester = tabFocusRequester,
                     onClick = { onEpisodeClick(it) }
                 )
             }
@@ -616,6 +673,7 @@ private fun EpisodesSection(
 @Composable
 private fun EpisodeCard(
     episode: EpisodeItem,
+    tabFocusRequester: FocusRequester,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -628,6 +686,9 @@ private fun EpisodeCard(
             modifier = Modifier
                 .width(300.dp)
                 .height(168.dp)
+                .focusProperties {
+                    up = tabFocusRequester
+                }
                 .onFocusChanged { isFocused = it.isFocused },
             colors = CardDefaults.colors(
                 containerColor = SurfaceDark,
@@ -774,7 +835,10 @@ private fun OverviewSection(overview: String?) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun CastSection(cast: List<CastItem>) {
+private fun CastSection(
+    cast: List<CastItem>,
+    tabFocusRequester: FocusRequester
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -800,7 +864,10 @@ private fun CastSection(cast: List<CastItem>) {
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             items(cast) {
-                CastCard(castItem = it)
+                CastCard(
+                    castItem = it,
+                    tabFocusRequester = tabFocusRequester
+                )
             }
         }
     }
@@ -808,13 +875,19 @@ private fun CastSection(cast: List<CastItem>) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun CastCard(castItem: CastItem) {
+private fun CastCard(
+    castItem: CastItem,
+    tabFocusRequester: FocusRequester
+) {
     var isFocused by remember { androidx.compose.runtime.mutableStateOf(false) }
     
     Card(
         onClick = {},
         modifier = Modifier
             .width(96.dp)
+            .focusProperties {
+                up = tabFocusRequester
+            }
             .onFocusChanged { isFocused = it.isFocused },
         colors = CardDefaults.colors(
             containerColor = Color.Transparent,
@@ -876,45 +949,61 @@ private fun CastCard(castItem: CastItem) {
 }
 
 /**
- * 季数下拉选择菜单
+ * 季数下拉选择菜单：打开后焦点落在当前季项上，方向键限制在菜单内，返回键关闭并回到选季按钮。
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun SeasonDropdownMenu(
     availableSeasons: List<Int>,
     selectedSeason: Int,
     onSeasonSelected: (Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismissMenu: () -> Unit
 ) {
-    // 计算菜单高度：每个选项约56dp，最多显示4个
     val itemHeight = 56.dp
     val maxVisibleItems = 4
     val menuHeight = if (availableSeasons.size <= maxVisibleItems) {
-        itemHeight * availableSeasons.size + 16.dp // 加上上下padding
+        itemHeight * availableSeasons.size + 16.dp
     } else {
         itemHeight * maxVisibleItems + 16.dp
     }
-    
+
+    val itemFocusRequesters = remember(availableSeasons) {
+        List(availableSeasons.size) { FocusRequester() }
+    }
+
+    LaunchedEffect(Unit) {
+        val idx = availableSeasons.indexOf(selectedSeason).takeIf { it >= 0 } ?: 0
+        delay(48)
+        itemFocusRequesters.getOrNull(idx)?.requestFocus()
+    }
+
     Box(
         modifier = Modifier
-            .padding(top = 56.dp) // 在按钮下方显示
+            .padding(top = 56.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(SurfaceDark)
             .width(140.dp)
-            .height(menuHeight) // 使用固定高度
+            .height(menuHeight)
+            .focusProperties {
+                exit = { FocusRequester.Cancel }
+            }
     ) {
-        // 使用TvLazyColumn支持滚动
-        androidx.tv.foundation.lazy.list.TvLazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(vertical = 8.dp),
-            pivotOffsets = PivotOffsets(0.5f, 0.5f)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp)
+                .focusGroup()
         ) {
-            items(availableSeasons.size) { index ->
-                val season = availableSeasons[index]
+            availableSeasons.forEachIndexed { index, season ->
                 val isSelected = season == selectedSeason
+                val prev = itemFocusRequesters.getOrNull(index - 1)
+                val next = itemFocusRequesters.getOrNull(index + 1)
                 Button(
-                    onClick = { onSeasonSelected(season) },
+                    onClick = {
+                        onSeasonSelected(season)
+                        onDismissMenu()
+                    },
                     colors = ButtonDefaults.colors(
                         containerColor = if (isSelected) PrimaryYellow.copy(alpha = 0.2f) else Color.Transparent,
                         contentColor = if (isSelected) PrimaryYellow else TextPrimary,
@@ -925,6 +1014,13 @@ private fun SeasonDropdownMenu(
                     ),
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(8.dp)),
                     modifier = Modifier
+                        .focusRequester(itemFocusRequesters[index])
+                        .focusProperties {
+                            up = prev ?: FocusRequester.Cancel
+                            down = next ?: FocusRequester.Cancel
+                            left = FocusRequester.Cancel
+                            right = FocusRequester.Cancel
+                        }
                         .fillMaxWidth()
                         .height(48.dp)
                         .padding(horizontal = 8.dp, vertical = 4.dp)

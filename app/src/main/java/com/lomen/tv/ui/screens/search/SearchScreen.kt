@@ -544,6 +544,7 @@ private fun SearchResultCard(
                     val typeText = when (result.type) {
                         MediaType.MOVIE -> "电影"
                         MediaType.TV_SHOW -> "电视剧"
+                        MediaType.ANIME -> "动漫"
                         MediaType.CONCERT -> "演唱会"
                         MediaType.VARIETY -> "综艺"
                         MediaType.DOCUMENTARY -> "纪录片"

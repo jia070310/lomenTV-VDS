@@ -1,10 +1,14 @@
 package com.lomen.tv
 
 import android.content.Context
+import com.lomen.tv.data.preferences.MediaClassificationPreferences
+import com.lomen.tv.data.preferences.MediaClassificationStrategyHolder
 import com.lomen.tv.domain.service.AppUpdateService
 import com.lomen.tv.domain.service.PlaybackStatsService
 import dagger.hilt.android.HiltAndroidApp
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -20,9 +24,16 @@ class LomenTVApplication : android.app.Application() {
     @Inject
     lateinit var playbackStatsService: PlaybackStatsService
 
+    @Inject
+    lateinit var mediaClassificationPreferences: MediaClassificationPreferences
+
     override fun onCreate() {
         super.onCreate()
         instance = this
+        runBlocking {
+            val strategy = mediaClassificationPreferences.classificationStrategy.first()
+            MediaClassificationStrategyHolder.update(strategy)
+        }
     }
 
     companion object {

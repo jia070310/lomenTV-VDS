@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.domain.service.NotificationService
+import com.lomen.tv.domain.service.PlaybackStatsService
 import com.lomen.tv.domain.service.WatchHistoryService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -15,7 +16,8 @@ import javax.inject.Inject
 class HomeViewModel @Inject constructor(
     private val movieDao: MovieDao,
     val watchHistoryService: WatchHistoryService,
-    private val notificationService: NotificationService
+    private val notificationService: NotificationService,
+    val playbackStatsService: PlaybackStatsService
 ) : ViewModel() {
 
     val recentWatchHistory = watchHistoryService.getRecentWatchHistory(30)

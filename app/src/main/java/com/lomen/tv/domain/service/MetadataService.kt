@@ -271,7 +271,15 @@ class MetadataService @Inject constructor(
                 Log.d(TAG, "getCastAndCrew: tmdbId=$tmdbId, type=$type")
                 
                 // 使用旧版API（api.tmdb.org）获取演职人员
-                val endpoint = if (type == MediaType.TV_SHOW) "tv" else "movie"
+                val endpoint = if (
+                    type == MediaType.TV_SHOW ||
+                    type == MediaType.VARIETY ||
+                    type == MediaType.ANIME
+                ) {
+                    "tv"
+                } else {
+                    "movie"
+                }
                 val url = "https://api.tmdb.org/3/$endpoint/$tmdbId/credits?api_key=$API_KEY&language=zh-CN"
                 Log.d(TAG, "getCastAndCrew: 请求URL: $url")
                 

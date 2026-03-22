@@ -251,12 +251,15 @@ class MediaSyncViewModel @Inject constructor(
         }
 
         // 生成文件指纹并保存到数据库
+        val fileByPath = files.associateBy { it.path }
         val entities = enrichedResults.map { scraped ->
-            val fingerprint = FileFingerprintManager.generateFingerprint(
-                scraped.filePath,
-                0, // 文件大小在WebDavFile中，这里简化处理
-                0  // 修改时间
-            )
+            val sourceFile = fileByPath[scraped.filePath]
+            val fingerprint = if (sourceFile != null) {
+                FileFingerprintManager.generateFingerprint(sourceFile)
+            } else {
+                // 兜底：极端情况下找不到源文件信息时，仍使用路径生成稳定指纹
+                FileFingerprintManager.generateFingerprint(scraped.filePath, 0, 0)
+            }
             
             // 如果是修改的文件，保持原有的 createdAt
             val isModified = scraped.filePath in modifiedPaths

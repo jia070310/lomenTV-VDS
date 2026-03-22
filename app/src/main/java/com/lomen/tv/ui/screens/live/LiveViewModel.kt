@@ -121,25 +121,55 @@ class LiveViewModel @Inject constructor(
     init {
         // 初始化错误处理器
         initErrorHandler()
-        
+            
         // 加载保存的设置和直播源
         viewModelScope.launch {
             val savedUrl = liveSettingsPreferences.liveSourceUrl.first()
             val savedEpgUrl = liveSettingsPreferences.epgUrl.first()
             val savedFavorites = liveSettingsPreferences.favoriteChannels.first()
-            
+            val lastPlayedChannelName = liveSettingsPreferences.lastPlayedChannelName.first()
+            val lastPlayedUrlIdx = liveSettingsPreferences.lastPlayedChannelUrlIdx.first()
+                
             if (savedUrl.isNotEmpty()) {
                 _sourceUrl.value = savedUrl
                 repository.loadSource(savedUrl).fold(
                     onSuccess = {
-                        // 加载成功后，自动选择第一个有URL的频道开始播放
-                        val firstChannel = repository.channelGroupList.value.allChannels()
-                            .firstOrNull { it.urlList.isNotEmpty() }
-                        firstChannel?.let { 
-                            _currentChannel.value = it
-                            _currentChannelUrlIdx.value = 0
+                        // 尝试恢复上次播放的频道
+                        if (!lastPlayedChannelName.isNullOrBlank()) {
+                            android.util.Log.d("LiveViewModel", "尝试恢复上次播放的频道：$lastPlayedChannelName, URL索引:$lastPlayedUrlIdx")
+                            // 查找保存的频道
+                            val lastChannel = repository.channelGroupList.value.allChannels()
+                                .firstOrNull { it.name == lastPlayedChannelName && it.urlList.isNotEmpty() }
+                                
+                            if (lastChannel != null) {
+                                // 找到相同的频道，使用保存的线路索引
+                                _currentChannel.value = lastChannel
+                                _currentChannelUrlIdx.value = if (lastPlayedUrlIdx < lastChannel.urlList.size) {
+                                    lastPlayedUrlIdx
+                                } else {
+                                    0 // 越界则重置为 0
+                                }
+                                android.util.Log.d("LiveViewModel", "成功恢复频道：${lastChannel.name}, 线路：${_currentChannelUrlIdx.value}")
+                            } else {
+                                // 未找到相同频道，选择第一个有 URL 的频道
+                                val firstChannel = repository.channelGroupList.value.allChannels()
+                                    .firstOrNull { it.urlList.isNotEmpty() }
+                                firstChannel?.let { 
+                                    _currentChannel.value = it
+                                    _currentChannelUrlIdx.value = 0
+                                }
+                                android.util.Log.d("LiveViewModel", "未找到保存的频道，从第一个频道开始播放")
+                            }
+                        } else {
+                            // 没有保存的频道，选择第一个有 URL 的频道
+                            val firstChannel = repository.channelGroupList.value.allChannels()
+                                .firstOrNull { it.urlList.isNotEmpty() }
+                            firstChannel?.let { 
+                                _currentChannel.value = it
+                                _currentChannelUrlIdx.value = 0
+                            }
                         }
-                        
+                            
                         // 优先从直播源的 x-tvg-url 加载 EPG
                         // 注意：使用 repository 当前的 channelGroupList
                         val allEpgUrls = repository.channelGroupList.value.allChannels()
@@ -315,6 +345,12 @@ class LiveViewModel @Inject constructor(
         hidePanel()
         // 通知错误处理器频道已切换
         errorHandler?.onChannelChanged()
+        
+        // 保存当前播放的频道信息
+        viewModelScope.launch {
+            liveSettingsPreferences.saveLastPlayedChannel(channel.name, urlIdx)
+            android.util.Log.d("LiveViewModel", "已保存播放位置：${channel.name}, 线路:$urlIdx")
+        }
     }
 
     /**

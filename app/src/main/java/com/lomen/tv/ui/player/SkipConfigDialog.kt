@@ -104,7 +104,7 @@ fun SkipConfigDialog(
                 .width(405.dp)
                 .height(360.dp)
                 .background(
-                    color = SurfaceDark.copy(alpha = 0.98f),
+                    color = Color(0xFF1A1A1A).copy(alpha = 0.5f),
                     shape = RoundedCornerShape(12.dp)
                 )
                 .border(

@@ -105,6 +105,22 @@ import com.lomen.tv.ui.components.VersionUpdateBadge
 
 private const val HOME_SECTION_MAX_ITEMS = 10
 
+private fun FocusRequester.tryRequestFocus(): Boolean {
+    return runCatching {
+        requestFocus()
+        true
+    }.getOrElse { false }
+}
+
+private fun requestFirstAvailableFocus(vararg requesters: FocusRequester?): Boolean {
+    requesters.forEach { requester ->
+        if (requester != null && requester.tryRequestFocus()) {
+            return true
+        }
+    }
+    return false
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -124,6 +140,7 @@ fun HomeScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     val navigationFocusRequester = remember { FocusRequester() }
     val contentFocusRequester = remember { FocusRequester() }
+    var focusedColumnIndex by remember { mutableIntStateOf(0) } // 0/1/2 对应第一/二/三列
 
     // 获取最近播放记录
     val recentWatchHistory by viewModel.recentWatchHistory.collectAsState()
@@ -152,6 +169,7 @@ fun HomeScreen(
 
     // 获取WebDAV媒体数据
     val tvShowsRaw by resourceLibraryViewModel.tvShows.collectAsState()
+    val animeRaw by resourceLibraryViewModel.anime.collectAsState()
     val moviesRaw by resourceLibraryViewModel.movies.collectAsState()
     val varietyRaw by resourceLibraryViewModel.variety.collectAsState()
     val concertsRaw by resourceLibraryViewModel.concerts.collectAsState()
@@ -160,15 +178,169 @@ fun HomeScreen(
     val currentLibrary by resourceLibraryViewModel.currentLibraryId.collectAsState()
     val mediaSortOrder by resourceLibraryViewModel.mediaSortOrder.collectAsState()
 
-    // 首页按 updatedAt 排序，不使用 remember 确保实时更新
-    val movies = moviesRaw.sortedByDescending { it.updatedAt }
-    val variety = varietyRaw.sortedByDescending { it.updatedAt }
-    val concerts = concertsRaw.sortedByDescending { it.updatedAt }
-    val documentaries = documentariesRaw.sortedByDescending { it.updatedAt }
-    val others = othersRaw.sortedByDescending { it.updatedAt }
-    val tvShows = tvShowsRaw.sortedByDescending { series ->
-        series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+    // 首页按“最新新增优先，其次最新更新”排序（适配当前横向列表视觉方向）
+    val movies = moviesRaw.sortedWith(
+        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
+            it.createdAt
+        }.thenBy { it.updatedAt }
+    )
+    val variety = varietyRaw.sortedWith(
+        compareBy<com.lomen.tv.ui.viewmodel.TvShowSeries> { series ->
+            series.episodes.maxOfOrNull { it.createdAt } ?: 0L
+        }.thenBy { series ->
+            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+        }
+    )
+    val concerts = concertsRaw.sortedWith(
+        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
+            it.createdAt
+        }.thenBy { it.updatedAt }
+    )
+    val documentaries = documentariesRaw.sortedWith(
+        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
+            it.createdAt
+        }.thenBy { it.updatedAt }
+    )
+    val others = othersRaw.sortedWith(
+        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
+            it.createdAt
+        }.thenBy { it.updatedAt }
+    )
+    val tvShows = tvShowsRaw.sortedWith(
+        compareBy<com.lomen.tv.ui.viewmodel.TvShowSeries> { series ->
+            series.episodes.maxOfOrNull { it.createdAt } ?: 0L
+        }.thenBy { series ->
+            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+        }
+    )
+    val anime = animeRaw.sortedWith(
+        compareBy<com.lomen.tv.ui.viewmodel.TvShowSeries> { series ->
+            series.episodes.maxOfOrNull { it.createdAt } ?: 0L
+        }.thenBy { series ->
+            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
+        }
+    )
+    val rowSpecs = remember(
+        recentWatchHistory,
+        mediaSortOrder,
+        tvShows,
+        anime,
+        movies,
+        variety,
+        concerts,
+        documentaries,
+        others
+    ) {
+        buildList {
+            if (recentWatchHistory.isNotEmpty()) {
+                val displayCount = recentWatchHistory.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                add(displayCount + if (recentWatchHistory.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+            }
+            mediaSortOrder.forEach { mediaType ->
+                when (mediaType) {
+                    com.lomen.tv.domain.model.MediaType.TV_SHOW -> {
+                        if (tvShows.isNotEmpty()) {
+                            val displayCount = tvShows.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (tvShows.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.ANIME -> {
+                        if (anime.isNotEmpty()) {
+                            val displayCount = anime.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (anime.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.MOVIE -> {
+                        if (movies.isNotEmpty()) {
+                            val displayCount = movies.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (movies.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.VARIETY -> {
+                        if (variety.isNotEmpty()) {
+                            val displayCount = variety.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (variety.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.CONCERT -> {
+                        if (concerts.isNotEmpty()) {
+                            val displayCount = concerts.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (concerts.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.DOCUMENTARY -> {
+                        if (documentaries.isNotEmpty()) {
+                            val displayCount = documentaries.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (documentaries.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.OTHER -> {
+                        if (others.isNotEmpty()) {
+                            val displayCount = others.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (others.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                }
+            }
+        }
     }
+    val rowFocusRequesters = remember(rowSpecs) {
+        rowSpecs.map { itemCount -> List(itemCount) { FocusRequester() } }
+    }
+    val mediaRowSpecs = remember(mediaSortOrder, tvShows, anime, movies, variety, concerts, documentaries, others) {
+        buildList {
+            mediaSortOrder.forEach { mediaType ->
+                when (mediaType) {
+                    com.lomen.tv.domain.model.MediaType.TV_SHOW -> {
+                        if (tvShows.isNotEmpty()) {
+                            val displayCount = tvShows.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (tvShows.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.ANIME -> {
+                        if (anime.isNotEmpty()) {
+                            val displayCount = anime.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (anime.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.MOVIE -> {
+                        if (movies.isNotEmpty()) {
+                            val displayCount = movies.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (movies.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.VARIETY -> {
+                        if (variety.isNotEmpty()) {
+                            val displayCount = variety.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (variety.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.CONCERT -> {
+                        if (concerts.isNotEmpty()) {
+                            val displayCount = concerts.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (concerts.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.DOCUMENTARY -> {
+                        if (documentaries.isNotEmpty()) {
+                            val displayCount = documentaries.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (documentaries.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.OTHER -> {
+                        if (others.isNotEmpty()) {
+                            val displayCount = others.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
+                            add(displayCount + if (others.size > HOME_SECTION_MAX_ITEMS) 1 else 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val mediaRowFocusRequesters = remember(mediaRowSpecs) {
+        mediaRowSpecs.map { itemCount -> List(itemCount) { FocusRequester() } }
+    }
+    val headerFocusRequesters = remember { List(3) { FocusRequester() } }
 
     // 获取同步状态
     val syncState by mediaSyncViewModel.syncState.collectAsState()
@@ -241,7 +413,7 @@ fun HomeScreen(
             .background(BackgroundDark)
             .onKeyEvent { keyEvent ->
                 if (keyEvent.key == Key.Menu && keyEvent.type == KeyEventType.KeyUp) {
-                    navigationFocusRequester.requestFocus()
+                    navigationFocusRequester.tryRequestFocus()
                     true
                 } else {
                     false
@@ -278,6 +450,8 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 100.dp),
             pivotOffsets = PivotOffsets(parentFraction = 0.1f)
         ) {
+            var rowIndexCursor = 0
+            var mediaRowIndexCursor = 0
             // Header
             item {
                 HomeHeader(
@@ -291,7 +465,11 @@ fun HomeScreen(
                     },
                     syncState = syncState,
                     syncProgress = syncProgress,
-                    notification = currentNotification
+                    notification = currentNotification,
+                    firstRowFocusRequesters = rowFocusRequesters.firstOrNull(),
+                    headerFocusRequesters = headerFocusRequesters,
+                    fallbackContentFocusRequester = contentFocusRequester,
+                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                 )
             }
 
@@ -308,9 +486,14 @@ fun HomeScreen(
                         watchHistoryItems = recentWatchHistory,
                         onItemClick = onPlayFromHistory,
                         showMore = recentWatchHistory.size > HOME_SECTION_MAX_ITEMS,
-                        onMoreClick = onNavigateToRecentWatching
+                        onMoreClick = onNavigateToRecentWatching,
+                        currentRowFocusRequesters = rowFocusRequesters.getOrNull(rowIndexCursor),
+                        headerFocusRequesters = headerFocusRequesters,
+                        isFirstContentRow = rowIndexCursor == 0,
+                        onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                     )
                 }
+                rowIndexCursor++
             }
             item { Spacer(modifier = Modifier.height(32.dp)) }
 
@@ -331,10 +514,42 @@ fun HomeScreen(
                                     onItemClick = onNavigateToDetail,
                                     showMore = tvShows.size > HOME_SECTION_MAX_ITEMS,
                                     moreLabel = "更多电视剧",
-                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.TV_SHOW) }
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.TV_SHOW) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
+                        }
+                    }
+                    com.lomen.tv.domain.model.MediaType.ANIME -> {
+                        if (anime.isNotEmpty()) {
+                            item {
+                                SectionTitle(
+                                    title = "动漫 (${anime.size}部)",
+                                    accentColor = Color(0xFFf59e0b)
+                                )
+                            }
+                            item {
+                                WebDavTvShowsRow(
+                                    tvShows = anime,
+                                    onItemClick = onNavigateToDetail,
+                                    showMore = anime.size > HOME_SECTION_MAX_ITEMS,
+                                    moreLabel = "更多动漫",
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.ANIME) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                )
+                            }
+                            item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
                         }
                     }
                     com.lomen.tv.domain.model.MediaType.MOVIE -> {
@@ -351,30 +566,42 @@ fun HomeScreen(
                                     onItemClick = onNavigateToDetail,
                                     showMore = movies.size > HOME_SECTION_MAX_ITEMS,
                                     moreLabel = "更多电影",
-                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.MOVIE) }
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.MOVIE) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
                         }
                     }
                     com.lomen.tv.domain.model.MediaType.VARIETY -> {
                         if (variety.isNotEmpty()) {
                             item {
                                 SectionTitle(
-                                    title = "综艺 (${variety.size})",
+                                    title = "综艺 (${variety.size}部)",
                                     accentColor = Color(0xFFec4899)
                                 )
                             }
                             item {
-                                WebDavMoviesRow(
-                                    movies = variety,
+                                WebDavTvShowsRow(
+                                    tvShows = variety,
                                     onItemClick = onNavigateToDetail,
                                     showMore = variety.size > HOME_SECTION_MAX_ITEMS,
                                     moreLabel = "更多综艺",
-                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.VARIETY) }
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.VARIETY) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
                         }
                     }
                     com.lomen.tv.domain.model.MediaType.CONCERT -> {
@@ -391,10 +618,16 @@ fun HomeScreen(
                                     onItemClick = onNavigateToDetail,
                                     showMore = concerts.size > HOME_SECTION_MAX_ITEMS,
                                     moreLabel = "更多演唱会",
-                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.CONCERT) }
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.CONCERT) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
                         }
                     }
                     com.lomen.tv.domain.model.MediaType.DOCUMENTARY -> {
@@ -411,10 +644,16 @@ fun HomeScreen(
                                     onItemClick = onNavigateToDetail,
                                     showMore = documentaries.size > HOME_SECTION_MAX_ITEMS,
                                     moreLabel = "更多纪录片",
-                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.DOCUMENTARY) }
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.DOCUMENTARY) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
                         }
                     }
                     com.lomen.tv.domain.model.MediaType.OTHER -> {
@@ -431,10 +670,16 @@ fun HomeScreen(
                                     onItemClick = onNavigateToDetail,
                                     showMore = others.size > HOME_SECTION_MAX_ITEMS,
                                     moreLabel = "更多其它",
-                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.OTHER) }
+                                    onMoreClick = { onNavigateToCategory(com.lomen.tv.domain.model.MediaType.OTHER) },
+                                    currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
+                                    headerFocusRequesters = headerFocusRequesters,
+                                    isFirstContentRow = rowIndexCursor == 0,
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
+                            rowIndexCursor++
+                            mediaRowIndexCursor++
                         }
                     }
                 }
@@ -486,7 +731,11 @@ fun HomeScreen(
             },
             onExitNavigation = {
                 // 按上键退出导航栏，将焦点返回到内容区域
-                contentFocusRequester.requestFocus()
+                requestFirstAvailableFocus(
+                    mediaRowFocusRequesters.lastOrNull()?.getOrNull(0),
+                    rowFocusRequesters.firstOrNull()?.getOrNull(0),
+                    contentFocusRequester
+                )
             },
             hasUpdate = hasUpdate,
             modifier = Modifier
@@ -571,7 +820,11 @@ private fun HomeHeader(
     onRefreshClick: () -> Unit,
     syncState: com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState = com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState.Idle,
     syncProgress: Pair<Int, Int> = 0 to 0,
-    notification: com.lomen.tv.domain.model.Notification? = null
+    notification: com.lomen.tv.domain.model.Notification? = null,
+    firstRowFocusRequesters: List<FocusRequester>? = null,
+    headerFocusRequesters: List<FocusRequester>,
+    fallbackContentFocusRequester: FocusRequester,
+    onFocusedColumnChanged: (Int) -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -640,7 +893,20 @@ private fun HomeHeader(
                     contentColor = TextSecondary,
                     focusedContainerColor = PrimaryYellow,
                     focusedContentColor = BackgroundDark
-                )
+                ),
+                modifier = Modifier
+                    .focusRequester(headerFocusRequesters[0])
+                    .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(0) }
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
+                            requestFirstAvailableFocus(
+                                firstRowFocusRequesters?.getOrNull(0),
+                                fallbackContentFocusRequester
+                            )
+                        } else {
+                            false
+                        }
+                    }
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
@@ -659,7 +925,20 @@ private fun HomeHeader(
                     contentColor = TextSecondary,
                     focusedContainerColor = PrimaryYellow,
                     focusedContentColor = BackgroundDark
-                )
+                ),
+                modifier = Modifier
+                    .focusRequester(headerFocusRequesters[1])
+                    .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(1) }
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
+                            requestFirstAvailableFocus(
+                                firstRowFocusRequesters?.getOrNull(0),
+                                fallbackContentFocusRequester
+                            )
+                        } else {
+                            false
+                        }
+                    }
             ) {
                 Icon(
                     imageVector = Icons.Default.Search,
@@ -680,6 +959,18 @@ private fun HomeHeader(
                     focusedContentColor = BackgroundDark
                 ),
                 modifier = Modifier
+                    .focusRequester(headerFocusRequesters[2])
+                    .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(2) }
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
+                            requestFirstAvailableFocus(
+                                firstRowFocusRequesters?.getOrNull(0),
+                                fallbackContentFocusRequester
+                            )
+                        } else {
+                            false
+                        }
+                    }
                     .size(40.dp)
                     .clip(CircleShape)
             ) {
@@ -699,11 +990,12 @@ private fun MoreMediaCard(
     label: String,
     onClick: () -> Unit,
     width: androidx.compose.ui.unit.Dp = 160.dp,
-    height: androidx.compose.ui.unit.Dp = 240.dp
+    height: androidx.compose.ui.unit.Dp = 240.dp,
+    modifier: Modifier = Modifier
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .width(width)
             .height(height),
         colors = CardDefaults.colors(
@@ -823,7 +1115,11 @@ private fun RecentWatchingRow(
     watchHistoryItems: List<com.lomen.tv.domain.service.WatchHistoryItem>,
     onItemClick: (com.lomen.tv.domain.service.WatchHistoryItem) -> Unit,
     showMore: Boolean = false,
-    onMoreClick: () -> Unit = {}
+    onMoreClick: () -> Unit = {},
+    currentRowFocusRequesters: List<FocusRequester>?,
+    headerFocusRequesters: List<FocusRequester>,
+    isFirstContentRow: Boolean,
+    onFocusedColumnChanged: (Int) -> Unit
 ) {
     val displayCount = watchHistoryItems.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
     val totalItems = displayCount + if (showMore) 1 else 0
@@ -847,14 +1143,40 @@ private fun RecentWatchingRow(
                 val historyItem = watchHistoryItems[index]
                 RecentCard(
                     historyItem = historyItem,
-                    onClick = { onItemClick(historyItem) }
+                    onClick = { onItemClick(historyItem) },
+                    modifier = Modifier
+                        .then(
+                            currentRowFocusRequesters
+                                ?.getOrNull(index)
+                                ?.let { Modifier.focusRequester(it) }
+                                ?: Modifier
+                        )
+                        .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
+                        .focusProperties {
+                            if (isFirstContentRow) {
+                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                            }
+                        }
                 )
             } else {
                 MoreMediaCard(
                     label = "更多",
                     onClick = onMoreClick,
                     width = 320.dp,
-                    height = 180.dp
+                    height = 180.dp,
+                    modifier = Modifier
+                        .then(
+                            currentRowFocusRequesters
+                                ?.getOrNull(index)
+                                ?.let { Modifier.focusRequester(it) }
+                                ?: Modifier
+                        )
+                        .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
+                        .focusProperties {
+                            if (isFirstContentRow) {
+                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                            }
+                        }
                 )
             }
         }
@@ -865,7 +1187,8 @@ private fun RecentWatchingRow(
 @Composable
 private fun RecentCard(
     historyItem: com.lomen.tv.domain.service.WatchHistoryItem,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     
@@ -889,7 +1212,7 @@ private fun RecentCard(
 
     Card(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .width(320.dp)
             .height(180.dp)
             .onFocusChanged { isFocused = it.isFocused },
@@ -1346,9 +1669,8 @@ private fun BottomNavigationBar(
                                 focusedContentColor = BackgroundDark
                             ),
                             modifier = Modifier
-                                .onKeyEvent { keyEvent ->
-                                    // 使用 onKeyEvent 在按键释放时处理
-                                    if (keyEvent.key == Key.DirectionUp && keyEvent.type == KeyEventType.KeyUp) {
+                                .onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.key == Key.DirectionUp && keyEvent.type == KeyEventType.KeyDown) {
                                         onExitNavigation()
                                         true
                                     } else {
@@ -1394,7 +1716,11 @@ private fun WebDavMoviesRow(
     onItemClick: (String) -> Unit,
     showMore: Boolean,
     moreLabel: String,
-    onMoreClick: () -> Unit
+    onMoreClick: () -> Unit,
+    currentRowFocusRequesters: List<FocusRequester>?,
+    headerFocusRequesters: List<FocusRequester>,
+    isFirstContentRow: Boolean,
+    onFocusedColumnChanged: (Int) -> Unit
 ) {
     val displayCount = movies.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
     val totalItems = displayCount + if (showMore) 1 else 0
@@ -1418,12 +1744,38 @@ private fun WebDavMoviesRow(
                 val movie = movies[index]
                 WebDavMediaCard(
                     media = movie,
-                    onClick = { onItemClick(movie.id) }
+                    onClick = { onItemClick(movie.id) },
+                    modifier = Modifier
+                        .then(
+                            currentRowFocusRequesters
+                                ?.getOrNull(index)
+                                ?.let { Modifier.focusRequester(it) }
+                                ?: Modifier
+                        )
+                        .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
+                        .focusProperties {
+                            if (isFirstContentRow) {
+                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                            }
+                        }
                 )
             } else {
                 MoreMediaCard(
                     label = moreLabel,
-                    onClick = onMoreClick
+                    onClick = onMoreClick,
+                    modifier = Modifier
+                        .then(
+                            currentRowFocusRequesters
+                                ?.getOrNull(index)
+                                ?.let { Modifier.focusRequester(it) }
+                                ?: Modifier
+                        )
+                        .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
+                        .focusProperties {
+                            if (isFirstContentRow) {
+                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                            }
+                        }
                 )
             }
         }
@@ -1438,7 +1790,11 @@ private fun WebDavTvShowsRow(
     onItemClick: (String) -> Unit,
     showMore: Boolean,
     moreLabel: String,
-    onMoreClick: () -> Unit
+    onMoreClick: () -> Unit,
+    currentRowFocusRequesters: List<FocusRequester>?,
+    headerFocusRequesters: List<FocusRequester>,
+    isFirstContentRow: Boolean,
+    onFocusedColumnChanged: (Int) -> Unit
 ) {
     val displayCount = tvShows.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
     val totalItems = displayCount + if (showMore) 1 else 0
@@ -1462,12 +1818,38 @@ private fun WebDavTvShowsRow(
                 val series = tvShows[index]
                 TvShowSeriesCard(
                     series = series,
-                    onClick = { onItemClick(series.id) }
+                    onClick = { onItemClick(series.id) },
+                    modifier = Modifier
+                        .then(
+                            currentRowFocusRequesters
+                                ?.getOrNull(index)
+                                ?.let { Modifier.focusRequester(it) }
+                                ?: Modifier
+                        )
+                        .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
+                        .focusProperties {
+                            if (isFirstContentRow) {
+                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                            }
+                        }
                 )
             } else {
                 MoreMediaCard(
                     label = moreLabel,
-                    onClick = onMoreClick
+                    onClick = onMoreClick,
+                    modifier = Modifier
+                        .then(
+                            currentRowFocusRequesters
+                                ?.getOrNull(index)
+                                ?.let { Modifier.focusRequester(it) }
+                                ?: Modifier
+                        )
+                        .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
+                        .focusProperties {
+                            if (isFirstContentRow) {
+                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                            }
+                        }
                 )
             }
         }
@@ -1479,7 +1861,8 @@ private fun WebDavTvShowsRow(
 @Composable
 private fun WebDavMediaCard(
     media: com.lomen.tv.data.local.database.entity.WebDavMediaEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     
@@ -1489,7 +1872,7 @@ private fun WebDavMediaCard(
     ) {
         Card(
             onClick = onClick,
-            modifier = Modifier
+            modifier = modifier
                 .width(160.dp)
                 .height(240.dp)
                 .onFocusChanged { isFocused = it.isFocused },
@@ -1610,7 +1993,8 @@ private fun WebDavMediaCard(
 @Composable
 private fun TvShowSeriesCard(
     series: com.lomen.tv.ui.viewmodel.TvShowSeries,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     
@@ -1620,7 +2004,7 @@ private fun TvShowSeriesCard(
     ) {
         Card(
             onClick = onClick,
-            modifier = Modifier
+            modifier = modifier
                 .width(160.dp)
                 .height(240.dp)
                 .onFocusChanged { isFocused = it.isFocused },

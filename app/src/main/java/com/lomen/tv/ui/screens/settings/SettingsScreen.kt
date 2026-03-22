@@ -102,7 +102,10 @@ import com.lomen.tv.ui.components.DownloadProgressToast
 import java.util.UUID
 import kotlinx.coroutines.launch
 import com.lomen.tv.data.preferences.LiveSettingsPreferences
+import com.lomen.tv.data.preferences.MediaClassificationPreferences
+import com.lomen.tv.data.preferences.MediaClassificationStrategyHolder
 import com.lomen.tv.data.preferences.TmdbApiPreferences
+import com.lomen.tv.domain.model.MediaClassificationStrategy
 import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -129,9 +132,11 @@ fun SettingsScreen(
     
     // 首页设置对话框状态
     var showSortDialog by remember { mutableStateOf(false) }
+    var showClassificationStrategyDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showForceRescrapeDialog by remember { mutableStateOf(false) }
     var showClearWatchHistoryDialog by remember { mutableStateOf(false) }
+    var showClearPlaybackStatsDialog by remember { mutableStateOf(false) }
     var showTmdbApiDialog by remember { mutableStateOf(false) }
     var showClearTmdbApiDialog by remember { mutableStateOf(false) }
     var showSuccessMessage by remember { mutableStateOf<String?>(null) }
@@ -173,12 +178,14 @@ fun SettingsScreen(
                 selectedCategory = selectedCategory,
                 onShowWebDavDialog = { showWebDavDialog = true },
                 onShowSortDialog = { showSortDialog = true },
+                onShowClassificationStrategyDialog = { showClassificationStrategyDialog = true },
                 onShowClearCacheDialog = { showClearCacheDialog = true },
                 onShowForceRescrapeDialog = { showForceRescrapeDialog = true },
                 onShowClearWatchHistoryDialog = { showClearWatchHistoryDialog = true },
                 onShowTmdbApiDialog = { showTmdbApiDialog = true },
                 onShowClearTmdbApiDialog = { showClearTmdbApiDialog = true },
                 onShowVersionUpdateDialog = { showVersionUpdateDialog = true },
+                onShowClearPlaybackStatsDialog = { showClearPlaybackStatsDialog = true },
                 hasUpdate = hasUpdate,
                 versionInfo = versionInfo,
                 hasCustomTmdbKey = hasCustomTmdbKey,
@@ -249,6 +256,9 @@ fun SettingsScreen(
     val sortPreferences = remember {
         com.lomen.tv.data.preferences.MediaTypeSortPreferences(context)
     }
+    val classificationPreferences = remember {
+        MediaClassificationPreferences(context)
+    }
     val currentLibrary = resourceLibraryViewModel.getCurrentLibrary()
     
     // 对话框回调
@@ -317,6 +327,18 @@ fun SettingsScreen(
             onSuccess = {
                 showSortDialog = false
                 showSuccessMessage = "排序设置已保存"
+            }
+        )
+    }
+
+    // 媒体类型识别策略（结构优先 / 关键词优先）
+    if (showClassificationStrategyDialog) {
+        ClassificationStrategyDialog(
+            classificationPreferences = classificationPreferences,
+            onDismiss = { showClassificationStrategyDialog = false },
+            onSuccess = {
+                showClassificationStrategyDialog = false
+                showSuccessMessage = "识别策略已保存"
             }
         )
     }
@@ -428,6 +450,24 @@ fun SettingsScreen(
                 }
             },
             onDismiss = { showClearWatchHistoryDialog = false }
+        )
+    }
+
+    // 清零播放时长确认对话框
+    if (showClearPlaybackStatsDialog) {
+        val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+        val coroutineScope = rememberCoroutineScope()
+        ConfirmDialog(
+            title = "清零播放时长",
+            message = "确定要清零应用统计中的总播放时长吗？\n此操作不可恢复。",
+            onConfirm = {
+                coroutineScope.launch {
+                    homeViewModel.playbackStatsService.clearTotalPlaybackTime()
+                    showClearPlaybackStatsDialog = false
+                    showSuccessMessage = "总播放时长已清零"
+                }
+            },
+            onDismiss = { showClearPlaybackStatsDialog = false }
         )
     }
 }
@@ -591,12 +631,14 @@ private fun SettingsContent(
     selectedCategory: Int,
     onShowWebDavDialog: () -> Unit,
     onShowSortDialog: () -> Unit,
+    onShowClassificationStrategyDialog: () -> Unit,
     onShowClearCacheDialog: () -> Unit,
     onShowForceRescrapeDialog: () -> Unit,
     onShowClearWatchHistoryDialog: () -> Unit,
     onShowTmdbApiDialog: () -> Unit,
     onShowClearTmdbApiDialog: () -> Unit,
     onShowVersionUpdateDialog: () -> Unit,
+    onShowClearPlaybackStatsDialog: () -> Unit,
     hasUpdate: Boolean,
     versionInfo: VersionInfo?,
     hasCustomTmdbKey: Boolean = false,
@@ -644,6 +686,7 @@ private fun SettingsContent(
                         Spacer(modifier = Modifier.height(16.dp))
                         HomeSettingsSection(
                             onShowSortDialog = onShowSortDialog,
+                            onShowClassificationStrategyDialog = onShowClassificationStrategyDialog,
                             onShowClearCacheDialog = onShowClearCacheDialog,
                             onShowForceRescrapeDialog = onShowForceRescrapeDialog,
                             onShowTmdbApiDialog = onShowTmdbApiDialog,
@@ -676,7 +719,8 @@ private fun SettingsContent(
                         AboutSection(
                             hasUpdate = hasUpdate,
                             versionInfo = versionInfo,
-                            onVersionUpdateClick = onShowVersionUpdateDialog
+                            onVersionUpdateClick = onShowVersionUpdateDialog,
+                            onStatsClick = onShowClearPlaybackStatsDialog
                         )
                     }
                 }
@@ -744,6 +788,7 @@ private fun ResourceImportSection(
 @Composable
 private fun HomeSettingsSection(
     onShowSortDialog: () -> Unit,
+    onShowClassificationStrategyDialog: () -> Unit,
     onShowClearCacheDialog: () -> Unit,
     onShowForceRescrapeDialog: () -> Unit,
     onShowTmdbApiDialog: () -> Unit,
@@ -753,6 +798,11 @@ private fun HomeSettingsSection(
 ) {
     val resourceLibraryViewModel: com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel = hiltViewModel()
     val currentLibrary = resourceLibraryViewModel.getCurrentLibrary()
+    val context = LocalContext.current
+    val classificationPrefs = remember { MediaClassificationPreferences(context) }
+    val strategyLabel by classificationPrefs.classificationStrategy.collectAsState(
+        initial = MediaClassificationPreferences.DEFAULT_STRATEGY
+    )
     
     Column {
         // 媒体分类排序
@@ -761,10 +811,28 @@ private fun HomeSettingsSection(
             iconBackgroundColor = Color.White.copy(alpha = 0.4f),
             iconTint = Color(0xFF34d399),
             title = "媒体分类排序",
-            subtitle = "自定义首页显示顺序（电视剧、电影、综艺等）",
+            subtitle = "自定义首页显示顺序（电视剧、动漫、电影、综艺等）",
             onClick = onShowSortDialog,
             modifier = Modifier.fillMaxWidth(),
             isFirstItem = true
+        )
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        val strategySubtitle = when (strategyLabel) {
+            MediaClassificationStrategy.KEYWORD_FIRST ->
+                "当前：关键词优先（路径/文件名中的类型词优先于季集结构）"
+            MediaClassificationStrategy.STRUCTURE_FIRST ->
+                "当前：结构优先（季集、纯集数等结构优先于类型词）"
+        }
+        SettingCard(
+            icon = Icons.Default.Speed,
+            iconBackgroundColor = Color.White.copy(alpha = 0.4f),
+            iconTint = Color(0xFFf472b6),
+            title = "媒体类型识别策略",
+            subtitle = strategySubtitle,
+            onClick = onShowClassificationStrategyDialog,
+            modifier = Modifier.fillMaxWidth()
         )
         
         Spacer(modifier = Modifier.height(16.dp))
@@ -977,8 +1045,12 @@ private fun PlaybackSettingsSection(
 private fun AboutSection(
     hasUpdate: Boolean,
     versionInfo: VersionInfo?,
-    onVersionUpdateClick: () -> Unit
+    onVersionUpdateClick: () -> Unit,
+    onStatsClick: () -> Unit
 ) {
+    val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = hiltViewModel()
+    val totalPlayTime by homeViewModel.playbackStatsService.totalPlaybackTimeMs.collectAsState(initial = 0L)
+
     Column {
         Row(
             horizontalArrangement = Arrangement.spacedBy(24.dp)
@@ -1002,14 +1074,15 @@ private fun AboutSection(
                 isFirstItem = true
             )
 
-            // 应用统计 - 总播放时间
-            val totalPlayTime by remember { mutableStateOf(0L) } // 从数据库读取总播放时间(毫秒)
+            // 应用统计 - 总播放时间（汇总全部观看记录 progress）
             val hours = totalPlayTime / (1000 * 60 * 60)
             val minutes = (totalPlayTime / (1000 * 60)) % 60
+            val seconds = (totalPlayTime / 1000) % 60
             val timeText = when {
                 hours > 0 -> "总播放时间: ${hours}小时${minutes}分钟"
-                minutes > 0 -> "总播放时间: ${minutes}分钟"
-                else -> "总播放时间: 0分钟"
+                minutes > 0 -> "总播放时间: ${minutes}分${seconds}秒"
+                seconds > 0 -> "总播放时间: ${seconds}秒"
+                else -> "总播放时间: 0秒"
             }
             InfoCard(
                 icon = Icons.Default.Timer,
@@ -1018,7 +1091,7 @@ private fun AboutSection(
                 title = "应用统计",
                 subtitle = timeText,
                 badge = null,
-                onClick = {},
+                onClick = onStatsClick,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1657,6 +1730,7 @@ private fun MediaTypeSortDialog(
     
     val mediaTypeLabels = mapOf(
         com.lomen.tv.domain.model.MediaType.TV_SHOW to "电视剧",
+        com.lomen.tv.domain.model.MediaType.ANIME to "动漫",
         com.lomen.tv.domain.model.MediaType.MOVIE to "电影",
         com.lomen.tv.domain.model.MediaType.VARIETY to "综艺",
         com.lomen.tv.domain.model.MediaType.CONCERT to "演唱会",
@@ -1894,6 +1968,191 @@ private fun MediaTypeSortDialog(
         }
     }
     
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ClassificationStrategyOptionRow(
+    selected: MediaClassificationStrategy,
+    strategy: MediaClassificationStrategy,
+    title: String,
+    description: String,
+    onSelect: (MediaClassificationStrategy) -> Unit
+) {
+    val isSel = selected == strategy
+    Button(
+        onClick = { onSelect(strategy) },
+        colors = ButtonDefaults.colors(
+            containerColor = if (isSel) PrimaryYellow.copy(alpha = 0.25f) else Color.Transparent,
+            contentColor = TextPrimary,
+            focusedContainerColor = PrimaryYellow.copy(alpha = 0.35f),
+            focusedContentColor = TextPrimary
+        ),
+        shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted
+            )
+        }
+    }
+}
+
+/**
+ * 媒体类型识别策略：结构优先 / 关键词优先（刮削时区分电影/电视剧/综艺等）
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun ClassificationStrategyDialog(
+    classificationPreferences: MediaClassificationPreferences,
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit
+) {
+    val currentStrategy by classificationPreferences.classificationStrategy.collectAsState(
+        initial = MediaClassificationPreferences.DEFAULT_STRATEGY
+    )
+    var selected by remember(currentStrategy) { mutableStateOf(currentStrategy) }
+    val coroutineScope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .clickable(
+                onClick = { },
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(
+                containerColor = SurfaceDark,
+                focusedContainerColor = SurfaceDark
+            ),
+            modifier = Modifier
+                .width(720.dp)
+                .height(420.dp)
+                .padding(32.dp)
+                .focusProperties { canFocus = true }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp)
+            ) {
+                Text(
+                    text = "媒体类型识别策略",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "影响刮削时如何区分电影、电视剧、综艺、纪录片等。修改后建议执行「强制全量刮削」。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+
+                ClassificationStrategyOptionRow(
+                    selected = selected,
+                    strategy = MediaClassificationStrategy.STRUCTURE_FIRST,
+                    title = "结构优先",
+                    description = "优先根据文件名中的季集（S01E01）、纯集数等结构判断，再参考「综艺、纪录片」等关键词。",
+                    onSelect = { selected = it }
+                )
+                ClassificationStrategyOptionRow(
+                    selected = selected,
+                    strategy = MediaClassificationStrategy.KEYWORD_FIRST,
+                    title = "关键词优先",
+                    description = "优先根据路径/文件名中的类型词（综艺、纪录片、动漫等）判断，再参考季集结构。适合按类型分文件夹整理的资源。",
+                    onSelect = { selected = it }
+                )
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    var cancelFocused by remember { mutableStateOf(false) }
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = BackgroundDark
+                        ),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
+                        modifier = Modifier
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { cancelFocused = it.isFocused }
+                            .focusProperties { left = FocusRequester.Cancel }
+                    ) {
+                        Text(
+                            text = "取消",
+                            color = if (cancelFocused) BackgroundDark else TextMuted
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    var saveFocused by remember { mutableStateOf(false) }
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                classificationPreferences.saveClassificationStrategy(selected)
+                                MediaClassificationStrategyHolder.update(selected)
+                                onSuccess()
+                            }
+                        },
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = BackgroundDark
+                        ),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
+                        modifier = Modifier.onFocusChanged { saveFocused = it.isFocused }
+                    ) {
+                        Text(
+                            text = "保存",
+                            color = if (saveFocused) BackgroundDark else TextMuted
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
