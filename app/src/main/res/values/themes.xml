@@ -6,6 +6,8 @@
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:windowNoTitle">true</item>
+        <!-- 避免半透明窗口在圆角处透出桌面/底层颜色 -->
+        <item name="android:windowIsTranslucent">false</item>
     </style>
 
     <style name="Theme.LomenTV.Fullscreen" parent="Theme.LomenTV">

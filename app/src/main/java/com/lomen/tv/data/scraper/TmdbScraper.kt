@@ -42,9 +42,9 @@ class TmdbScraper private constructor() {
     companion object {
         private const val TAG = "TmdbScraper"
         
-        // 默认 API 密钥（个人免费版，仅用于演示）
-        private const val DEFAULT_API_KEY = "cd1660fdecd8066874f593beab890967"
-        private const val DEFAULT_API_READ_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJjZDE2NjBmZGVjZDgwNjY4NzRmNTkzYmVhYjg5MDk2NyIsIm5iZiI6MTcyMzgxMDI1NC45MjYsInN1YiI6IjY2YmY0MWNlODBhMjIzZTNkZDUwZWQxOSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.PG_TLHful_sxjJPXbYr1VrdD-YFRBlfwPniPVz0ZgwE"
+        /** 未在设置中配置时为空，不内置演示 Key */
+        private const val DEFAULT_API_KEY = ""
+        private const val DEFAULT_API_READ_TOKEN = ""
         
         private const val BASE_URL = "https://api.themoviedb.org/3"
         private const val IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
@@ -608,6 +608,10 @@ class TmdbScraper private constructor() {
     )
 
     private fun makeRequest(urlString: String): JSONObject? {
+        if (getApiKey().isBlank() && getApiReadToken().isBlank()) {
+            Log.w(TAG, "TMDB API 未配置，跳过请求")
+            return null
+        }
         // 首先尝试使用域名（正常方式）；client 内置对 api.themoviedb.org 的 DNS 兜底
         for (host in TMDB_API_HOSTS) {
             val modifiedUrl = urlString.replace("api.themoviedb.org", host)

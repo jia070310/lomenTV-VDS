@@ -68,6 +68,7 @@ import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
+import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.viewmodel.TmdbApiViewModel
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -88,7 +89,7 @@ fun TmdbApiSettingsDialog(
     
     // 生成二维码 - 增大尺寸以获得更清晰的二维码
     val qrCodeBitmap = remember(serverUrl) {
-        generateQRCode(serverUrl, 400)
+        generateQRCode(serverUrl, 320)
     }
     
     // 焦点管理 - 创建外部容器的焦点请求器
@@ -146,8 +147,8 @@ fun TmdbApiSettingsDialog(
                     focusedContainerColor = SurfaceDark
                 ),
                 modifier = Modifier
-                    .width(320.dp)  // 缩小宽度
-                    .height(365.dp)  // 缩小高度
+                    .width(DialogDimens.QrCardWidth)
+                    .height(DialogDimens.QrCardHeight)
                     .onPreviewKeyEvent { keyEvent ->
                         // 拦截所有按键事件，防止光标移出窗口
                         when (keyEvent.key) {
@@ -170,7 +171,7 @@ fun TmdbApiSettingsDialog(
                     }
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
+                    modifier = Modifier.padding(DialogDimens.QrCardPadding),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // 标题栏 - 右上角关闭按钮
@@ -225,10 +226,10 @@ fun TmdbApiSettingsDialog(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth(0.6f)
-                                .heightIn(max = 180.dp)
+                                .heightIn(max = DialogDimens.QrImageMaxHeight)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(Color.White)
-                                .padding(10.dp),
+                                .padding(8.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Image(

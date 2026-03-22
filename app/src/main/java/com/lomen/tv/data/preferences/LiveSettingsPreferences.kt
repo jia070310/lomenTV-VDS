@@ -38,6 +38,9 @@ class LiveSettingsPreferences @Inject constructor(
         val USER_AGENT_HISTORY = stringPreferencesKey("user_agent_history")
         val VIDEO_ASPECT_RATIO = intPreferencesKey("video_aspect_ratio")
         val AUTO_REFRESH_INTERVAL = intPreferencesKey("auto_refresh_interval") // 小时，0 表示禁用
+
+        /** 未写入过该键时的默认间隔（小时） */
+        const val DEFAULT_AUTO_REFRESH_INTERVAL_HOURS = 2
                 
         // 记忆播放位置
         val LAST_PLAYED_CHANNEL_NAME = stringPreferencesKey("last_played_channel_name")
@@ -415,7 +418,7 @@ class LiveSettingsPreferences @Inject constructor(
      * 0 表示禁用自动刷新
      */
     val autoRefreshInterval: Flow<Int> = dataStore.data.map { preferences ->
-        preferences[AUTO_REFRESH_INTERVAL] ?: 0
+        preferences[AUTO_REFRESH_INTERVAL] ?: DEFAULT_AUTO_REFRESH_INTERVAL_HOURS
     }
 
     /**

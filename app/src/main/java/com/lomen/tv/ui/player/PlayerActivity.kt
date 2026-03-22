@@ -3,9 +3,13 @@ package com.lomen.tv.ui.player
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
+import com.lomen.tv.R
+import com.lomen.tv.ui.theme.BackgroundDark
 import com.lomen.tv.ui.theme.LomenTVTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -24,6 +28,8 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        window.setBackgroundDrawableResource(R.color.background_dark)
+
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         val videoUrl = intent.getStringExtra(EXTRA_VIDEO_URL) ?: ""
@@ -35,15 +41,21 @@ class PlayerActivity : ComponentActivity() {
 
         setContent {
             LomenTVTheme {
-                PlayerScreen(
-                    videoUrl = videoUrl,
-                    title = title,
-                    episodeTitle = episodeTitle,
-                    mediaId = mediaId,
-                    episodeId = episodeId,
-                    startPosition = startPosition,
-                    onBackPressed = { finish() }
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(BackgroundDark)
+                ) {
+                    PlayerScreen(
+                        videoUrl = videoUrl,
+                        title = title,
+                        episodeTitle = episodeTitle,
+                        mediaId = mediaId,
+                        episodeId = episodeId,
+                        startPosition = startPosition,
+                        onBackPressed = { finish() }
+                    )
+                }
             }
         }
     }

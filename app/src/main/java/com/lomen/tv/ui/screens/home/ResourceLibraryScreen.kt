@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
@@ -68,6 +70,10 @@ import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
 import com.lomen.tv.ui.viewmodel.MediaSyncViewModel
+import com.lomen.tv.ui.LocalCompactUiScale
+import com.lomen.tv.ui.computeCompactUiScale
+import com.lomen.tv.ui.scale
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -89,6 +95,10 @@ private val StatusRed = Color(0xFFEF4444)
 private val TextZinc400 = Color(0xFFA1A1AA)
 private val TextZinc500 = Color(0xFF71717A)
 private val TextZinc600 = Color(0xFF52525B)
+
+/** 资源库列表单行高度基准（再乘紧凑缩放）；缩小以在分区内约显示两行 */
+private val LibraryListRowHeightBase = 62.dp
+private val LibraryListVerticalGapBase = 8.dp
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -162,6 +172,12 @@ fun ResourceLibraryScreen(
         }
     }
 
+    val configuration = LocalConfiguration.current
+    val compactScale = remember(configuration.screenHeightDp, configuration.screenWidthDp) {
+        computeCompactUiScale(configuration.screenHeightDp, configuration.screenWidthDp)
+    }
+
+    CompositionLocalProvider(LocalCompactUiScale provides compactScale) {
     Box(modifier = Modifier.fillMaxSize()) {
         // 主布局 - 左右分栏
         Row(
@@ -173,7 +189,7 @@ fun ResourceLibraryScreen(
             Sidebar(
                 onNavigateBack = onNavigateBack,
                 onNavigateToSettings = onNavigateToSettings,
-                modifier = Modifier.width(280.dp)
+                modifier = Modifier.width(280.dp.scale(compactScale))
             )
 
             // 右侧主内容区
@@ -208,23 +224,26 @@ fun ResourceLibraryScreen(
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 48.dp)
+                    .padding(bottom = 48.dp.scale(compactScale))
             ) {
                 androidx.compose.foundation.layout.Row(
                     modifier = Modifier
                         .background(
                             color = Color(0xFFEF4444).copy(alpha = 0.92f),
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(12.dp.scale(compactScale))
                         )
-                        .padding(horizontal = 24.dp, vertical = 14.dp),
+                        .padding(
+                            horizontal = 24.dp.scale(compactScale),
+                            vertical = 14.dp.scale(compactScale)
+                        ),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp.scale(compactScale))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Error,
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(20.dp.scale(compactScale))
                     )
                     Text(
                         text = errorMessage!!,
@@ -235,6 +254,7 @@ fun ResourceLibraryScreen(
             }
         }
     }
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -244,23 +264,26 @@ private fun Sidebar(
     onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalCompactUiScale.current
     Column(
         modifier = modifier
             .fillMaxHeight()
             .background(SidebarBackground)
-            .padding(32.dp),
+            .padding(32.dp.scale(s)),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         // 顶部标题区域
         Column {
             Text(
                 text = "资源库",
-                style = MaterialTheme.typography.headlineLarge,
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = (MaterialTheme.typography.headlineLarge.fontSize.value * s).sp
+                ),
                 color = Color.White,
                 fontWeight = FontWeight.Black
             )
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(48.dp.scale(s)))
 
             // 导航菜单
             NavigationItem(
@@ -298,7 +321,7 @@ private fun Sidebar(
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(16.dp.scale(s)),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
@@ -306,12 +329,14 @@ private fun Sidebar(
                     imageVector = Icons.Default.Menu,
                     contentDescription = null,
                     tint = AccentYellow,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(24.dp.scale(s))
                 )
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(12.dp.scale(s)))
                 Text(
                     text = currentTime,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                    ),
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold
                 )
@@ -328,6 +353,7 @@ private fun NavigationItem(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
 
     Button(
@@ -338,28 +364,30 @@ private fun NavigationItem(
             focusedContainerColor = FocusYellow,
             focusedContentColor = BackgroundDark
         ),
-        shape = ButtonDefaults.shape(shape = RoundedCornerShape(16.dp)),
+        shape = ButtonDefaults.shape(shape = RoundedCornerShape(16.dp.scale(s))),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 4.dp.scale(s))
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp.scale(s), vertical = 12.dp.scale(s)),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(24.dp.scale(s)),
                 tint = if (isFocused) BackgroundDark else if (isSelected) AccentYellow else TextZinc500
             )
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(16.dp.scale(s)))
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                ),
                 color = if (isFocused) BackgroundDark else if (isSelected) AccentYellow else TextZinc500,
                 fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
             )
@@ -390,6 +418,7 @@ private fun MainContent(
     onCheckResult: (String, Boolean) -> Unit,
     onError: (String) -> Unit = {}
 ) {
+    val s = LocalCompactUiScale.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -401,7 +430,7 @@ private fun MainContent(
                     )
                 )
             )
-            .padding(48.dp)
+            .padding(48.dp.scale(s))
     ) {
         // 顶部状态摘要
         HeaderSection(
@@ -411,21 +440,21 @@ private fun MainContent(
             activeCount = activeCount
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(32.dp.scale(s)))
 
         // 同步状态显示
         when (syncState) {
             is MediaSyncViewModel.SyncState.Scanning -> {
                 SyncStatusCardV2("正在扫描文件...", syncProgress)
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp.scale(s)))
             }
             is MediaSyncViewModel.SyncState.Scraping -> {
                 SyncStatusCardV2("正在刮削信息 (${syncProgress.first}/${syncProgress.second})...", syncProgress)
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp.scale(s)))
             }
             is MediaSyncViewModel.SyncState.Error -> {
-                SyncStatusCardV2("同步失败", syncProgress, isError = true)
-                Spacer(modifier = Modifier.height(16.dp))
+                SyncStatusCardV2(syncState.message, syncProgress, isError = true)
+                Spacer(modifier = Modifier.height(16.dp.scale(s)))
             }
             else -> {}
         }
@@ -440,22 +469,28 @@ private fun MainContent(
             val quarkLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.QUARK }
             val firstFocusableLibraryId = webDavLibraries.firstOrNull()?.id ?: quarkLibraries.firstOrNull()?.id
 
-            // 上下两栏布局（顶部 WebDAV，底部网盘）
+            val libRowH = LibraryListRowHeightBase.scale(s)
+            val libGap = LibraryListVerticalGapBase.scale(s)
+            // 每区列表可视高度 ≈ 两行 + 行间距，超出部分在分区内滚动
+            val libListViewportH = libRowH + libGap + libRowH
+
+            // 上下分区：列表固定可视两行，网盘区与 WEBDAV 之间留白；底部留白把「添加」按钮顶在下方
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                    .fillMaxWidth()
             ) {
-                // 上方 - WEBDAV本地区（始终显示）
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
+                // WEBDAV本地区
+                Column(modifier = Modifier.fillMaxWidth()) {
                     SectionTitle(title = "WEBDAV本地区", accentColor = AccentYellow)
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(10.dp.scale(s)))
                     if (webDavLibraries.isNotEmpty()) {
                         TvLazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(libListViewportH),
+                            verticalArrangement = Arrangement.spacedBy(libGap),
+                            pivotOffsets = androidx.tv.foundation.PivotOffsets(parentFraction = 0.15f)
                         ) {
                             items(webDavLibraries) { library ->
                                 val isChecking = checkingLibraryId == library.id
@@ -488,19 +523,33 @@ private fun MainContent(
                             }
                         }
                     } else {
-                        EmptyWebDavLibraryView(onAddLibrary = onAddLibrary)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(libListViewportH),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            EmptyWebDavLibraryView(
+                                onAddLibrary = onAddLibrary,
+                                compact = true
+                            )
+                        }
                     }
                 }
 
-                // 下方 - 网盘区（始终显示）
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
+                Spacer(modifier = Modifier.height(28.dp.scale(s)))
+
+                // 网盘区（下移，与 WEBDAV 列表区分更明显）
+                Column(modifier = Modifier.fillMaxWidth()) {
                     SectionTitle(title = "网盘区", accentColor = TextZinc600)
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(10.dp.scale(s)))
                     if (quarkLibraries.isNotEmpty()) {
                         TvLazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(libListViewportH),
+                            verticalArrangement = Arrangement.spacedBy(libGap),
+                            pivotOffsets = androidx.tv.foundation.PivotOffsets(parentFraction = 0.15f)
                         ) {
                             items(quarkLibraries) { library ->
                                 val isChecking = checkingLibraryId == library.id
@@ -533,9 +582,18 @@ private fun MainContent(
                             }
                         }
                     } else {
-                        EmptyQuarkLibraryView()
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(libListViewportH),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            EmptyQuarkLibraryView(compact = true)
+                        }
                     }
                 }
+
+                Spacer(modifier = Modifier.weight(1f))
 
                 AddLibraryButtonV2(onClick = onAddLibrary)
             }
@@ -582,6 +640,7 @@ private fun HeaderSection(
     quarkCount: Int,
     activeCount: Int
 ) {
+    val s = LocalCompactUiScale.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -590,20 +649,24 @@ private fun HeaderSection(
         Column {
             Text(
                 text = "资源库列表",
-                style = MaterialTheme.typography.headlineLarge,
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = (MaterialTheme.typography.headlineLarge.fontSize.value * s).sp
+                ),
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 text = "当前有 $libraryCount 个资源库",
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                ),
                 color = TextZinc400,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 8.dp.scale(s))
             )
         }
 
         Row(
-            horizontalArrangement = Arrangement.spacedBy(24.dp)
+            horizontalArrangement = Arrangement.spacedBy(24.dp.scale(s))
         ) {
             // 统计卡片
             StatCard(
@@ -632,24 +695,29 @@ private fun StatCard(
     value: String,
     borderColor: Color
 ) {
+    val s = LocalCompactUiScale.current
     GlassCard(
         modifier = Modifier,
         borderColor = borderColor
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+            modifier = Modifier.padding(horizontal = 24.dp.scale(s), vertical = 16.dp.scale(s)),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = (MaterialTheme.typography.labelSmall.fontSize.value * s).sp
+                ),
                 color = TextZinc500,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(4.dp.scale(s)))
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+                ),
                 color = if (borderColor == StatusGreen.copy(alpha = 0.3f)) StatusGreen else Color.White,
                 fontWeight = FontWeight.Bold
             )
@@ -663,21 +731,24 @@ private fun SectionTitle(
     title: String,
     accentColor: Color
 ) {
+    val s = LocalCompactUiScale.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
     ) {
         Box(
             modifier = Modifier
-                .width(4.dp)
-                .height(24.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .width(4.dp.scale(s))
+                .height(24.dp.scale(s))
+                .clip(RoundedCornerShape(2.dp.scale(s)))
                 .background(accentColor)
         )
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(12.dp.scale(s)))
         Text(
             text = title,
-            style = MaterialTheme.typography.headlineSmall,
+            style = MaterialTheme.typography.headlineSmall.copy(
+                fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+            ),
             color = TextPrimary
         )
     }
@@ -722,6 +793,8 @@ private fun LibraryListItemV2(
     onEdit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val s = LocalCompactUiScale.current
+    val rowH = LibraryListRowHeightBase.scale(s)
     var isFocused by remember { mutableStateOf(false) }
     var isEditFocused by remember { mutableStateOf(false) }
     var isDeleteFocused by remember { mutableStateOf(false) }
@@ -729,9 +802,9 @@ private fun LibraryListItemV2(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 4.dp),
+            .padding(horizontal = 2.dp.scale(s), vertical = 2.dp.scale(s)),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp.scale(s))
     ) {
         Card(
             onClick = { if (enabled) onClick() },
@@ -746,19 +819,19 @@ private fun LibraryListItemV2(
             ),
             modifier = Modifier
                 .weight(1f)
-                .height(82.dp)
+                .height(rowH)
                 .onFocusChanged { isFocused = it.isFocused }
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                    .padding(horizontal = 14.dp.scale(s), vertical = 8.dp.scale(s)),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(36.dp.scale(s))
+                        .clip(RoundedCornerShape(10.dp.scale(s)))
                         .background(Color.White.copy(alpha = if (isFocused) 0.35f else 0.12f)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -766,40 +839,46 @@ private fun LibraryListItemV2(
                         imageVector = if (library.type == ResourceLibrary.LibraryType.WEBDAV) Icons.Default.Storage else Icons.Default.Cloud,
                         contentDescription = null,
                         tint = if (isFocused) Color.Black else if (library.type == ResourceLibrary.LibraryType.WEBDAV) Color(0xFF60a5fa) else Color(0xFF34d399),
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(18.dp.scale(s))
                     )
                 }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.width(10.dp.scale(s)))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = library.name,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s * 0.95f).sp
+                        ),
                         color = if (isFocused) Color.Black else TextPrimary,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(2.dp.scale(s)))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusIndicator(
                             isChecking = isChecking,
                             isConnected = isConnected
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(8.dp.scale(s)))
                         Text(
                             text = library.getDisplayUrl(),
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s * 0.92f).sp
+                            ),
                             color = if (isFocused) Color.Black.copy(alpha = 0.75f) else TextMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         if (isSelected) {
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(10.dp.scale(s)))
                             Text(
                                 text = "当前",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s * 0.92f).sp
+                                ),
                                 color = if (isFocused) Color.Black else AccentYellow,
                                 fontWeight = FontWeight.Bold
                             )
@@ -821,8 +900,8 @@ private fun LibraryListItemV2(
                 pressedScale = 1.0f
             ),
             modifier = Modifier
-                .width(56.dp)
-                .height(82.dp)
+                .width(48.dp.scale(s))
+                .height(rowH)
                 .onFocusChanged { isEditFocused = it.isFocused }
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -830,7 +909,7 @@ private fun LibraryListItemV2(
                     imageVector = Icons.Default.Edit,
                     contentDescription = "编辑",
                     tint = if (isEditFocused) Color.Black else AccentYellow,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp.scale(s))
                 )
             }
         }
@@ -847,8 +926,8 @@ private fun LibraryListItemV2(
                 pressedScale = 1.0f
             ),
             modifier = Modifier
-                .width(56.dp)
-                .height(82.dp)
+                .width(48.dp.scale(s))
+                .height(rowH)
                 .onFocusChanged { isDeleteFocused = it.isFocused }
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -856,7 +935,7 @@ private fun LibraryListItemV2(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "删除",
                     tint = if (isDeleteFocused) Color.Black else StatusRed,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp.scale(s))
                 )
             }
         }
@@ -868,8 +947,9 @@ private fun StatusIndicator(
     isChecking: Boolean,
     isConnected: Boolean?
 ) {
+    val s = LocalCompactUiScale.current
     Box(
-        modifier = Modifier.size(12.dp),
+        modifier = Modifier.size(12.dp.scale(s)),
         contentAlignment = Alignment.Center
     ) {
         when {
@@ -877,7 +957,7 @@ private fun StatusIndicator(
                 // 脉冲动画效果
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(8.dp.scale(s))
                         .clip(CircleShape)
                         .background(AccentYellow)
                 )
@@ -885,7 +965,7 @@ private fun StatusIndicator(
             isConnected == true -> {
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(8.dp.scale(s))
                         .clip(CircleShape)
                         .background(StatusGreen)
                 )
@@ -893,7 +973,7 @@ private fun StatusIndicator(
             isConnected == false -> {
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(8.dp.scale(s))
                         .clip(CircleShape)
                         .background(StatusRed)
                 )
@@ -901,7 +981,7 @@ private fun StatusIndicator(
             else -> {
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
+                        .size(8.dp.scale(s))
                         .clip(CircleShape)
                         .background(TextZinc600)
                 )
@@ -915,6 +995,7 @@ private fun StatusIndicator(
 private fun AddLibraryButtonV2(
     onClick: () -> Unit
 ) {
+    val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
 
     Card(
@@ -925,22 +1006,23 @@ private fun AddLibraryButtonV2(
         ),
         border = CardDefaults.border(
             focusedBorder = androidx.tv.material3.Border(
-                BorderStroke(2.dp, AccentYellow),
-                shape = RoundedCornerShape(16.dp)
+                BorderStroke(2.dp.scale(s), AccentYellow),
+                shape = RoundedCornerShape(16.dp.scale(s))
             )
         ),
         scale = CardDefaults.scale(focusedScale = 1.02f),
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .height(64.dp.scale(s))
             .onFocusChanged { isFocused = it.isFocused }
             .then(
                 if (!isFocused) {
                     Modifier.drawBehind {
+                        val r = 16.dp.scale(s).toPx()
                         drawRoundRect(
                             color = BorderColor,
-                            cornerRadius = CornerRadius(16.dp.toPx(), 16.dp.toPx()),
-                            style = Stroke(width = 2.dp.toPx(), pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f))
+                            cornerRadius = CornerRadius(r, r),
+                            style = Stroke(width = 2.dp.scale(s).toPx(), pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f))
                         )
                     }
                 } else Modifier
@@ -952,7 +1034,9 @@ private fun AddLibraryButtonV2(
         ) {
             Text(
                 text = "+ 添加新资源库",
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                ),
                 color = if (isFocused) Color.White else TextZinc500,
                 fontWeight = FontWeight.Bold
             )
@@ -962,67 +1046,142 @@ private fun AddLibraryButtonV2(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun EmptyQuarkLibraryView() {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Spacer(modifier = Modifier.height(32.dp))
-        Box(
-            modifier = Modifier
-                .size(64.dp)
-                .clip(CircleShape)
-                .background(TextZinc600.copy(alpha = 0.3f)),
-            contentAlignment = Alignment.Center
+private fun EmptyQuarkLibraryView(compact: Boolean = false) {
+    val s = LocalCompactUiScale.current
+    if (compact) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                imageVector = Icons.Default.Cloud,
-                contentDescription = null,
-                tint = TextZinc500,
-                modifier = Modifier.size(32.dp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp.scale(s))
+                    .clip(CircleShape)
+                    .background(TextZinc600.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = null,
+                    tint = TextZinc500,
+                    modifier = Modifier.size(22.dp.scale(s))
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp.scale(s)))
+            Text(
+                text = "暂无网盘",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                ),
+                color = TextZinc500
             )
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "暂无网盘",
-            style = MaterialTheme.typography.bodyLarge,
-            color = TextZinc500
-        )
+    } else {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(32.dp.scale(s)))
+            Box(
+                modifier = Modifier
+                    .size(64.dp.scale(s))
+                    .clip(CircleShape)
+                    .background(TextZinc600.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = null,
+                    tint = TextZinc500,
+                    modifier = Modifier.size(32.dp.scale(s))
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp.scale(s)))
+            Text(
+                text = "暂无网盘",
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                ),
+                color = TextZinc500
+            )
+        }
     }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun EmptyWebDavLibraryView(
-    onAddLibrary: () -> Unit
+    onAddLibrary: () -> Unit,
+    compact: Boolean = false
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Spacer(modifier = Modifier.height(32.dp))
-        Box(
-            modifier = Modifier
-                .size(64.dp)
-                .clip(CircleShape)
-                .background(TextZinc600.copy(alpha = 0.3f)),
-            contentAlignment = Alignment.Center
+    val s = LocalCompactUiScale.current
+    if (compact) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                imageVector = Icons.Default.Storage,
-                contentDescription = null,
-                tint = TextZinc500,
-                modifier = Modifier.size(32.dp)
+            Box(
+                modifier = Modifier
+                    .size(40.dp.scale(s))
+                    .clip(CircleShape)
+                    .background(TextZinc600.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Storage,
+                    contentDescription = null,
+                    tint = TextZinc500,
+                    modifier = Modifier.size(22.dp.scale(s))
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp.scale(s)))
+            Text(
+                text = "暂无WEBDAV",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                ),
+                color = TextZinc500
+            )
+            Spacer(modifier = Modifier.height(8.dp.scale(s)))
+            Text(
+                text = "请使用底部「添加新资源库」",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s * 0.9f).sp
+                ),
+                color = TextZinc600
             )
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "暂无WEBDAV",
-            style = MaterialTheme.typography.bodyLarge,
-            color = TextZinc500
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        AddLibraryButtonV2(onClick = onAddLibrary)
+    } else {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(32.dp.scale(s)))
+            Box(
+                modifier = Modifier
+                    .size(64.dp.scale(s))
+                    .clip(CircleShape)
+                    .background(TextZinc600.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Storage,
+                    contentDescription = null,
+                    tint = TextZinc500,
+                    modifier = Modifier.size(32.dp.scale(s))
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp.scale(s)))
+            Text(
+                text = "暂无WEBDAV",
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                ),
+                color = TextZinc500
+            )
+            Spacer(modifier = Modifier.height(24.dp.scale(s)))
+            AddLibraryButtonV2(onClick = onAddLibrary)
+        }
     }
 }
 
@@ -1031,6 +1190,7 @@ private fun EmptyWebDavLibraryView(
 private fun EmptyLibraryViewV2(
     onAddLibrary: () -> Unit
 ) {
+    val s = LocalCompactUiScale.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1040,12 +1200,12 @@ private fun EmptyLibraryViewV2(
     ) {
         GlassCard {
             Column(
-                modifier = Modifier.padding(48.dp),
+                modifier = Modifier.padding(48.dp.scale(s)),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
                     modifier = Modifier
-                        .size(80.dp)
+                        .size(80.dp.scale(s))
                         .clip(CircleShape)
                         .background(TextZinc600.copy(alpha = 0.3f)),
                     contentAlignment = Alignment.Center
@@ -1054,28 +1214,32 @@ private fun EmptyLibraryViewV2(
                         imageVector = Icons.Default.Storage,
                         contentDescription = null,
                         tint = TextZinc500,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(40.dp.scale(s))
                     )
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(24.dp.scale(s)))
 
                 Text(
                     text = "暂无资源库",
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+                    ),
                     color = Color.White,
                     fontWeight = FontWeight.Bold
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp.scale(s)))
 
                 Text(
                     text = "添加WebDAV网盘或网盘",
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                    ),
                     color = TextZinc500
                 )
 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(32.dp.scale(s)))
 
                 var isButtonFocused by remember { mutableStateOf(false) }
                 Button(
@@ -1086,22 +1250,24 @@ private fun EmptyLibraryViewV2(
                         focusedContainerColor = PrimaryYellow, // 选中：亮黄色底
                         focusedContentColor = BackgroundDark    // 选中：黑色字
                     ),
-                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
+                    shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp.scale(s))),
                     modifier = Modifier.onFocusChanged { isButtonFocused = it.isFocused }
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = null,
                         tint = if (isButtonFocused) BackgroundDark else TextPrimary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(20.dp.scale(s))
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(8.dp.scale(s)))
                     Text(
                         text = "添加资源库",
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                        ),
                         fontWeight = FontWeight.Bold,
                         color = if (isButtonFocused) BackgroundDark else TextPrimary,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp.scale(s), vertical = 4.dp.scale(s))
                     )
                 }
             }
@@ -1139,13 +1305,14 @@ private fun SyncStatusCardV2(
     progress: Pair<Int, Int>,
     isError: Boolean = false
 ) {
+    val s = LocalCompactUiScale.current
     GlassCard(
         borderColor = if (isError) StatusRed.copy(alpha = 0.3f) else AccentYellow.copy(alpha = 0.3f)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(16.dp.scale(s)),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -1157,20 +1324,22 @@ private fun SyncStatusCardV2(
                         imageVector = Icons.Default.Error,
                         contentDescription = null,
                         tint = StatusRed,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(24.dp.scale(s))
                     )
                 } else {
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = null,
                         tint = AccentYellow,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(24.dp.scale(s))
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(12.dp.scale(s)))
                 Text(
                     text = message,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                    ),
                     color = if (isError) StatusRed else Color.White
                 )
             }
@@ -1178,7 +1347,9 @@ private fun SyncStatusCardV2(
             if (!isError && progress.second > 0) {
                 Text(
                     text = "${progress.first}/${progress.second}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = (MaterialTheme.typography.bodyMedium.fontSize.value * s).sp
+                    ),
                     color = AccentYellow,
                     fontWeight = FontWeight.Bold
                 )

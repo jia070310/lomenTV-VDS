@@ -84,6 +84,8 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.tv.material3.Icon
+import com.lomen.tv.data.preferences.TmdbApiPreferences
+import com.lomen.tv.ui.components.InfoPillToast
 import com.lomen.tv.R
 import androidx.tv.material3.IconButton
 import androidx.tv.material3.IconButtonDefaults
@@ -98,6 +100,7 @@ import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
+import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.screens.settings.TmdbApiSettingsDialog
 import com.lomen.tv.ui.viewmodel.VersionUpdateViewModel
 import com.lomen.tv.ui.components.VersionUpdateBadge
@@ -350,10 +353,18 @@ fun HomeScreen(
     // 获取同步状态
     val syncState by mediaSyncViewModel.syncState.collectAsState()
     val syncProgress by mediaSyncViewModel.syncProgress.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var showTmdbScanPill by remember { mutableStateOf(false) }
 
-    // 调试日志
     LaunchedEffect(syncState) {
         android.util.Log.d("HomeScreen", "Sync state changed: $syncState, progress: $syncProgress")
+        if (syncState is com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState.Error) {
+            val msg = (syncState as com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState.Error).message
+            if (msg == TmdbApiPreferences.MSG_TMDB_REQUIRED_FOR_SCAN) {
+                showTmdbScanPill = true
+            }
+            mediaSyncViewModel.resetState()
+        }
     }
 
     // TMDB API 配置检测
@@ -366,10 +377,7 @@ fun HomeScreen(
     val hasUpdate by versionUpdateViewModel.hasUpdate.collectAsState()
     val versionInfo by versionUpdateViewModel.versionInfo.collectAsState()
     var showVersionUpdateDialog by remember { mutableStateOf(false) }
-    
-    // 获取上下文
-    val context = androidx.compose.ui.platform.LocalContext.current
-    
+
     // 启动时检测 TMDB API 配置
     LaunchedEffect(Unit) {
         // 延迟检测，确保界面已加载
@@ -814,6 +822,14 @@ fun HomeScreen(
         val downloadProgress by versionUpdateViewModel.downloadProgress.collectAsState()
         if (isDownloading) {
             com.lomen.tv.ui.components.DownloadProgressToast(progress = downloadProgress)
+        }
+
+        if (showTmdbScanPill) {
+            InfoPillToast(message = TmdbApiPreferences.MSG_TMDB_REQUIRED_FOR_SCAN)
+            LaunchedEffect(showTmdbScanPill) {
+                delay(2500)
+                showTmdbScanPill = false
+            }
         }
     }
 }
@@ -2230,14 +2246,14 @@ private fun TmdbApiRequiredDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .width(600.dp)
-                .padding(32.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
                 .focusProperties {
                     canFocus = true
                 }
         ) {
             Column(
-                modifier = Modifier.padding(32.dp)
+                modifier = Modifier.padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = "需要配置 TMDB API",

@@ -18,7 +18,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,8 +36,10 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -59,15 +66,20 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -99,6 +111,7 @@ import com.lomen.tv.domain.model.VersionInfo
 import com.lomen.tv.domain.service.DownloadService
 import com.lomen.tv.ui.components.VersionUpdateDialog
 import com.lomen.tv.ui.components.DownloadProgressToast
+import com.lomen.tv.ui.components.InfoPillToast
 import java.util.UUID
 import kotlinx.coroutines.launch
 import com.lomen.tv.data.preferences.LiveSettingsPreferences
@@ -107,6 +120,10 @@ import com.lomen.tv.data.preferences.MediaClassificationStrategyHolder
 import com.lomen.tv.data.preferences.TmdbApiPreferences
 import com.lomen.tv.domain.model.MediaClassificationStrategy
 import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
+import com.lomen.tv.ui.LocalCompactUiScale
+import com.lomen.tv.ui.computeCompactUiScale
+import com.lomen.tv.ui.DialogDimens
+import com.lomen.tv.ui.scale
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -141,6 +158,7 @@ fun SettingsScreen(
     var showTmdbApiDialog by remember { mutableStateOf(false) }
     var showClearTmdbApiDialog by remember { mutableStateOf(false) }
     var showSuccessMessage by remember { mutableStateOf<String?>(null) }
+    var showTmdbScanPill by remember { mutableStateOf(false) }
     
     // TMDB API 状态 - 提前声明以便在 UI 中使用
     val tmdbApiViewModel: com.lomen.tv.ui.viewmodel.TmdbApiViewModel = hiltViewModel()
@@ -155,11 +173,17 @@ fun SettingsScreen(
         SettingCategory("关于应用", Icons.Default.Info)
     )
 
+    val configuration = LocalConfiguration.current
+    val compactScale = remember(configuration.screenHeightDp, configuration.screenWidthDp) {
+        computeCompactUiScale(configuration.screenHeightDp, configuration.screenWidthDp)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundDark)
     ) {
+        CompositionLocalProvider(LocalCompactUiScale provides compactScale) {
         Row(
             modifier = Modifier.fillMaxSize()
         ) {
@@ -195,6 +219,7 @@ fun SettingsScreen(
                 contentFocusRequester = contentFocusRequester,
                 sidebarFocusRequester = sidebarFocusRequester
             )
+        }
         }
         
         // WebDAV配置弹窗 - 添加新资源库（放在Box内部确保全屏覆盖）
@@ -295,7 +320,11 @@ fun SettingsScreen(
             mediaSyncViewModel.resetState()
         } else if (syncState is com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState.Error) {
             val error = (syncState as com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState.Error).message
-            showSuccessMessage = "刮削失败: $error"
+            if (error == TmdbApiPreferences.MSG_TMDB_REQUIRED_FOR_SCAN) {
+                showTmdbScanPill = true
+            } else {
+                showSuccessMessage = "刮削失败: $error"
+            }
             mediaSyncViewModel.resetState()
         }
     }
@@ -306,6 +335,14 @@ fun SettingsScreen(
         androidx.compose.runtime.LaunchedEffect(showSuccessMessage) {
             kotlinx.coroutines.delay(2000)
             showSuccessMessage = null
+        }
+    }
+
+    if (showTmdbScanPill) {
+        InfoPillToast(message = TmdbApiPreferences.MSG_TMDB_REQUIRED_FOR_SCAN)
+        androidx.compose.runtime.LaunchedEffect(showTmdbScanPill) {
+            delay(2500)
+            showTmdbScanPill = false
         }
     }
     
@@ -359,7 +396,6 @@ fun SettingsScreen(
             onConfirm = {
                 mediaSyncViewModel.syncLibrary(currentLibrary)
                 showForceRescrapeDialog = false
-                showSuccessMessage = "已开始全量刮削"
             },
             onDismiss = { showForceRescrapeDialog = false }
         )
@@ -491,17 +527,18 @@ private fun SettingsSidebar(
     sidebarFocusRequester: FocusRequester,
     contentFocusRequester: FocusRequester
 ) {
+    val s = LocalCompactUiScale.current
     Column(
         modifier = Modifier
-            .width(240.dp)
+            .width(240.dp.scale(s))
             .fillMaxHeight()
             .background(SurfaceDark)
-            .padding(24.dp)
+            .padding(24.dp.scale(s))
     ) {
         // 返回按钮和标题
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 32.dp)
+            modifier = Modifier.padding(bottom = 32.dp.scale(s))
         ) {
             IconButton(
                 onClick = onNavigateBack,
@@ -511,22 +548,22 @@ private fun SettingsSidebar(
                     focusedContainerColor = PrimaryYellow,
                     focusedContentColor = BackgroundDark
                 ),
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(48.dp.scale(s))
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "返回",
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(28.dp.scale(s))
                 )
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(16.dp.scale(s)))
 
             // Logo
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(40.dp.scale(s))
+                    .clip(RoundedCornerShape(12.dp.scale(s)))
                     .background(PrimaryYellow),
                 contentAlignment = Alignment.Center
             ) {
@@ -534,20 +571,22 @@ private fun SettingsSidebar(
                     imageVector = Icons.Default.PlayArrow,
                     contentDescription = null,
                     tint = BackgroundDark,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(24.dp.scale(s))
                 )
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(12.dp.scale(s)))
 
             Text(
                 text = "设置中心",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontSize = (MaterialTheme.typography.headlineMedium.fontSize.value * s).sp
+                ),
                 color = TextPrimary
             )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(16.dp.scale(s)))
 
         // 导航菜单
         categories.forEachIndexed { index, category ->
@@ -562,10 +601,10 @@ private fun SettingsSidebar(
                     focusedContainerColor = PrimaryYellow,
                     focusedContentColor = BackgroundDark
                 ),
-                shape = ButtonDefaults.shape(shape = RoundedCornerShape(16.dp)),
+                shape = ButtonDefaults.shape(shape = RoundedCornerShape(16.dp.scale(s))),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp)
+                    .padding(vertical = 4.dp.scale(s))
                     .focusRequester(itemFocusRequester)
                     .onFocusChanged { isFocused = it.isFocused }
                     .focusProperties {
@@ -577,7 +616,7 @@ private fun SettingsSidebar(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 12.dp)
+                        .padding(horizontal = 8.dp.scale(s), vertical = 12.dp.scale(s))
                 ) {
                     Icon(
                         imageVector = category.icon,
@@ -587,12 +626,14 @@ private fun SettingsSidebar(
                             isSelected -> PrimaryYellow
                             else -> TextPrimary
                         },
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(24.dp.scale(s))
                     )
-                    Spacer(modifier = Modifier.width(16.dp))
+                    Spacer(modifier = Modifier.width(16.dp.scale(s)))
                     Text(
                         text = category.name,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                        ),
                         color = when {
                             isFocused -> BackgroundDark
                             isSelected -> PrimaryYellow
@@ -604,7 +645,7 @@ private fun SettingsSidebar(
                         Spacer(modifier = Modifier.weight(1f))
                         Box(
                             modifier = Modifier
-                                .size(8.dp)
+                                .size(8.dp.scale(s))
                                 .clip(CircleShape)
                                 .background(Color.Red)
                         )
@@ -626,9 +667,11 @@ private fun SettingsSidebar(
         }
         Text(
             text = "系统时间：$currentTime",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+            ),
             color = TextMuted,
-            modifier = Modifier.padding(bottom = 16.dp) // 增加底部内边距，避免被截断
+            modifier = Modifier.padding(bottom = 16.dp.scale(s)) // 增加底部内边距，避免被截断
         )
     }
 }
@@ -655,6 +698,7 @@ private fun SettingsContent(
     contentFocusRequester: FocusRequester,
     sidebarFocusRequester: FocusRequester
 ) {
+    val s = LocalCompactUiScale.current
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -666,7 +710,7 @@ private fun SettingsContent(
                     )
                 )
             )
-            .padding(48.dp)
+            .padding(48.dp.scale(s))
             .focusRequester(contentFocusRequester)
             .focusProperties {
                 // 左键返回到侧边栏
@@ -675,14 +719,14 @@ private fun SettingsContent(
     ) {
         androidx.tv.foundation.lazy.list.TvLazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 80.dp),
+            contentPadding = PaddingValues(bottom = 80.dp.scale(s)),
             pivotOffsets = androidx.tv.foundation.PivotOffsets(parentFraction = 0.1f)
         ) {
             when (selectedCategory) {
                 0 -> { // 资源管理
                     item {
                         SectionTitle(title = "资源导入", accentColor = PrimaryYellow)
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(16.dp.scale(s)))
                         ResourceImportSection(
                             onShowWebDavDialog = onShowWebDavDialog
                         )
@@ -691,7 +735,7 @@ private fun SettingsContent(
                 1 -> { // 首页设置
                     item {
                         SectionTitle(title = "首页设置", accentColor = PrimaryYellow)
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(16.dp.scale(s)))
                         HomeSettingsSection(
                             onShowSortDialog = onShowSortDialog,
                             onShowClassificationStrategyDialog = onShowClassificationStrategyDialog,
@@ -707,7 +751,7 @@ private fun SettingsContent(
                 2 -> { // 播放设置
                     item {
                         SectionTitle(title = "播放设置", accentColor = PrimaryYellow)
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(16.dp.scale(s)))
                         PlaybackSettingsSection(
                             onShowClearWatchHistoryDialog = onShowClearWatchHistoryDialog
                         )
@@ -716,14 +760,14 @@ private fun SettingsContent(
                 3 -> { // 直播设置
                     item {
                         SectionTitle(title = "直播设置", accentColor = PrimaryYellow)
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(16.dp.scale(s)))
                         LiveSettingsSection()
                     }
                 }
                 4 -> { // 关于应用
                     item {
                         SectionTitle(title = "关于应用", accentColor = PrimaryYellow)
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(16.dp.scale(s)))
                         AboutSection(
                             hasUpdate = hasUpdate,
                             versionInfo = versionInfo,
@@ -740,20 +784,23 @@ private fun SettingsContent(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun SectionTitle(title: String, accentColor: Color) {
+    val s = LocalCompactUiScale.current
     Row(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .width(4.dp)
-                .height(24.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .width(4.dp.scale(s))
+                .height(24.dp.scale(s))
+                .clip(RoundedCornerShape(2.dp.scale(s)))
                 .background(accentColor)
         )
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(12.dp.scale(s)))
         Text(
             text = title,
-            style = MaterialTheme.typography.headlineSmall,
+            style = MaterialTheme.typography.headlineSmall.copy(
+                fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+            ),
             color = TextPrimary
         )
     }
@@ -764,8 +811,9 @@ private fun SectionTitle(title: String, accentColor: Color) {
 private fun ResourceImportSection(
     onShowWebDavDialog: () -> Unit
 ) {
+    val s = LocalCompactUiScale.current
     Row(
-        horizontalArrangement = Arrangement.spacedBy(24.dp)
+        horizontalArrangement = Arrangement.spacedBy(24.dp.scale(s))
     ) {
         // 连通网盘
         SettingCard(
@@ -811,6 +859,8 @@ private fun HomeSettingsSection(
     val strategyLabel by classificationPrefs.classificationStrategy.collectAsState(
         initial = MediaClassificationPreferences.DEFAULT_STRATEGY
     )
+    val s = LocalCompactUiScale.current
+    val gap = 16.dp.scale(s)
     
     Column {
         // 媒体分类排序
@@ -825,7 +875,7 @@ private fun HomeSettingsSection(
             isFirstItem = true
         )
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(gap))
 
         val strategySubtitle = when (strategyLabel) {
             MediaClassificationStrategy.KEYWORD_FIRST ->
@@ -843,7 +893,7 @@ private fun HomeSettingsSection(
             modifier = Modifier.fillMaxWidth()
         )
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(gap))
         
         // TMDB API 设置 - 显示当前状态
         // 判断是否有自定义API Key：有自定义Key且不等于默认值
@@ -872,7 +922,7 @@ private fun HomeSettingsSection(
             modifier = Modifier.fillMaxWidth()
         )
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(gap))
         
         // 强制全量刮削
         SettingCard(
@@ -885,7 +935,7 @@ private fun HomeSettingsSection(
             modifier = Modifier.fillMaxWidth()
         )
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(gap))
         
         // 清除缓存
         SettingCard(
@@ -898,7 +948,7 @@ private fun HomeSettingsSection(
             modifier = Modifier.fillMaxWidth()
         )
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(gap))
         
         // 清除 TMDB API Key
         SettingCard(
@@ -918,6 +968,7 @@ private fun HomeSettingsSection(
 private fun PlaybackSettingsSection(
     onShowClearWatchHistoryDialog: () -> Unit = {}
 ) {
+    val s = LocalCompactUiScale.current
     val playerSettingsPreferences = androidx.hilt.navigation.compose.hiltViewModel<com.lomen.tv.ui.viewmodel.PlayerSettingsViewModel>()
     val autoSkipEnabled by playerSettingsPreferences.autoSkipIntroOutro.collectAsState(initial = true)
     val rememberPlaybackEnabled by playerSettingsPreferences.rememberPlaybackPosition.collectAsState(initial = true)
@@ -1033,7 +1084,7 @@ private fun PlaybackSettingsSection(
             }
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(16.dp.scale(s)))
 
         // 清空最近播放记录
         SettingCard(
@@ -1056,12 +1107,13 @@ private fun AboutSection(
     onVersionUpdateClick: () -> Unit,
     onStatsClick: () -> Unit
 ) {
+    val s = LocalCompactUiScale.current
     val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = hiltViewModel()
     val totalPlayTime by homeViewModel.playbackStatsService.totalPlaybackTimeMs.collectAsState(initial = 0L)
 
     Column {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(24.dp)
+            horizontalArrangement = Arrangement.spacedBy(24.dp.scale(s))
         ) {
             // 版本更新 - 从BuildConfig动态获取当前版本号
             val currentVersion = BuildConfig.VERSION_NAME
@@ -1104,7 +1156,7 @@ private fun AboutSection(
             )
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(32.dp.scale(s)))
 
         // 应用信息
         var isFocused by remember { mutableStateOf(false) }
@@ -1124,29 +1176,37 @@ private fun AboutSection(
                 .onFocusChanged { isFocused = it.isFocused }
         ) {
             Column(
-                modifier = Modifier.padding(24.dp)
+                modifier = Modifier.padding(24.dp.scale(s))
             ) {
                 Text(
                     text = "柠檬TV",
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black else TextPrimary
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp.scale(s)))
                 Text(
                     text = "一款专为Android TV设计的视频播放器，支持WebDAV网盘资源导入、IPTV直播、智能跳过片头片尾、记忆续播等功能。",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = (MaterialTheme.typography.bodyMedium.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp.scale(s)))
                 Text(
                     text = "GitHub: https://github.com/jia070310/lomenTV-VDS",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp.scale(s)))
                 Text(
                     text = "© 2026 柠檬TV 版权所有",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
             }
@@ -1166,6 +1226,7 @@ private fun SettingCard(
     modifier: Modifier = Modifier,
     isFirstItem: Boolean = false
 ) {
+    val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     
@@ -1188,19 +1249,20 @@ private fun SettingCard(
             pressedScale = 1.0f
         ),
         modifier = modifier
-            .height(120.dp)
+            .height(84.dp.scale(s))
             .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp)
+                .padding(horizontal = 16.dp.scale(s), vertical = 12.dp.scale(s)),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(40.dp.scale(s))
+                    .clip(RoundedCornerShape(10.dp.scale(s)))
                     .background(iconBackgroundColor),
                 contentAlignment = Alignment.Center
             ) {
@@ -1208,27 +1270,33 @@ private fun SettingCard(
                     imageVector = icon,
                     contentDescription = null,
                     tint = if (isFocused) Color.Black else iconTint,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(22.dp.scale(s))
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.width(14.dp.scale(s)))
 
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (isFocused) Color.Black else TextPrimary
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s).sp
+                    ),
+                    color = if (isFocused) Color.Black else TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp.scale(s)))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                    ),
+                    color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -1242,6 +1310,7 @@ private fun SettingListItem(
     onClick: (() -> Unit)? = null,
     isFirstItem: Boolean = false
 ) {
+    val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     
@@ -1271,24 +1340,143 @@ private fun SettingListItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .padding(horizontal = 24.dp.scale(s), vertical = 20.dp.scale(s)),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black else TextPrimary
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(4.dp.scale(s)))
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
             }
             trailing(isFocused)
+        }
+    }
+}
+
+private val autoRefreshIntervalOptions = listOf(0, 1, 2, 4, 6, 12)
+
+/** 定时刷新：右侧药丸按钮背景（与参考图一致，非高亮态） */
+private val AutoRefreshTriggerPillIdleColor = Color(0xFF333333)
+
+/** 与直播设置项 Switch 行内高度接近；下拉内文字与触发器一致 */
+private val AutoRefreshTriggerTextSize = 12.sp
+private val AutoRefreshTriggerLineHeight = 15.sp
+private val AutoRefreshTriggerIconSize = 16.dp
+/** TV Switch 轨道视觉约 32dp 高，药丸与之对齐 */
+private val AutoRefreshTriggerHeight = 32.dp
+
+private val AutoRefreshDropdownMenuWidth = 92.dp
+
+/** 菜单内选项行高（紧凑，比例接近参考图） */
+private val AutoRefreshDropdownItemHeight = 24.dp
+
+/** 上拉菜单底边与下方药丸按钮顶之间的空隙（约一行高度，参照设计图） */
+private val AutoRefreshMenuGapAboveTrigger = 26.dp
+
+/** 上拉菜单相对锚点的额外平移（右正、下正）；勿用 remember(density) 缓存，否则改数值不生效 */
+private val AutoRefreshPopupExtraOffsetX = 5.dp
+private val AutoRefreshPopupExtraOffsetY = 5.dp
+
+/** 菜单面板圆角（略大，接近参考图） */
+private val AutoRefreshDropdownPanelShape = RoundedCornerShape(16.dp)
+
+private val AutoRefreshPillShape = RoundedCornerShape(percent = 50)
+
+/**
+ * 定时刷新下拉：深色圆角面板；项为白字，焦点行黄底黑字（与参考图一致）。
+ */
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun AutoRefreshIntervalDropdownMenu(
+    selectedHours: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val itemFocusRequesters = remember(autoRefreshIntervalOptions) {
+        List(autoRefreshIntervalOptions.size) { FocusRequester() }
+    }
+    LaunchedEffect(Unit) {
+        val idx = autoRefreshIntervalOptions.indexOf(selectedHours).takeIf { it >= 0 } ?: 0
+        delay(48)
+        itemFocusRequesters.getOrNull(idx)?.requestFocus()
+    }
+    Box(
+        modifier = Modifier
+            .width(AutoRefreshDropdownMenuWidth)
+            .shadow(8.dp, AutoRefreshDropdownPanelShape, ambientColor = Color.Black.copy(alpha = 0.45f))
+            .clip(AutoRefreshDropdownPanelShape)
+            .background(Color(0xFF2A2A2A))
+            .focusProperties {
+                exit = { FocusRequester.Cancel }
+            }
+    ) {
+        // 不滚动：六项一次完整展示；内边距让高亮胶囊略窄于面板（参照图）
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .focusGroup(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            autoRefreshIntervalOptions.forEachIndexed { index, hours ->
+                val isSelected = hours == selectedHours
+                val label = if (hours == 0) "关闭" else "${hours}小时"
+                val prev = itemFocusRequesters.getOrNull(index - 1)
+                val next = itemFocusRequesters.getOrNull(index + 1)
+                Button(
+                    onClick = {
+                        onSelect(hours)
+                        onDismiss()
+                    },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.colors(
+                        containerColor = if (isSelected) PrimaryYellow.copy(alpha = 0.18f) else Color.Transparent,
+                        contentColor = Color.White,
+                        focusedContainerColor = PrimaryYellow,
+                        focusedContentColor = Color.Black,
+                        pressedContainerColor = PrimaryYellow,
+                        pressedContentColor = Color.Black
+                    ),
+                    shape = ButtonDefaults.shape(shape = AutoRefreshPillShape),
+                    modifier = Modifier
+                        .focusRequester(itemFocusRequesters[index])
+                        .focusProperties {
+                            up = prev ?: FocusRequester.Cancel
+                            down = next ?: FocusRequester.Cancel
+                            left = FocusRequester.Cancel
+                            right = FocusRequester.Cancel
+                        }
+                        .fillMaxWidth()
+                        .defaultMinSize(minWidth = 0.dp, minHeight = 0.dp)
+                        .height(AutoRefreshDropdownItemHeight)
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = Color.Unspecified,
+                            fontSize = AutoRefreshTriggerTextSize,
+                            lineHeight = AutoRefreshTriggerLineHeight
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }
@@ -1306,6 +1494,7 @@ private fun InfoCard(
     modifier: Modifier = Modifier,
     isFirstItem: Boolean = false
 ) {
+    val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     
@@ -1328,19 +1517,19 @@ private fun InfoCard(
             pressedScale = 1.0f
         ),
         modifier = modifier
-            .height(100.dp)
+            .height(100.dp.scale(s))
             .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .padding(20.dp.scale(s)),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(48.dp.scale(s))
                     .clip(CircleShape)
                     .background(iconBackgroundColor),
                 contentAlignment = Alignment.Center
@@ -1349,23 +1538,27 @@ private fun InfoCard(
                     imageVector = icon,
                     contentDescription = null,
                     tint = if (isFocused) Color.Black else iconTint,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(24.dp.scale(s))
                 )
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(16.dp.scale(s)))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black else TextPrimary,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                 )
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(2.dp.scale(s)))
                 Text(
                     text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                    ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
             }
@@ -1373,13 +1566,15 @@ private fun InfoCard(
             badge?.let {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(12.dp.scale(s)))
                         .background(if (isFocused) Color.Black.copy(alpha = 0.2f) else PrimaryYellow.copy(alpha = 0.2f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .padding(horizontal = 12.dp.scale(s), vertical = 4.dp.scale(s))
                 ) {
                     Text(
                         text = it,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = (MaterialTheme.typography.labelSmall.fontSize.value * s).sp
+                        ),
                         color = if (isFocused) Color.Black else PrimaryYellow,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                     )
@@ -1489,15 +1684,15 @@ private fun ConfirmDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .width(600.dp)
-                .padding(32.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
                 .focusProperties {
                     // 禁止焦点向外移动，实现焦点陷阱
                     canFocus = true
                 }
         ) {
             Column(
-                modifier = Modifier.padding(32.dp)
+                modifier = Modifier.padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = title,
@@ -1621,8 +1816,8 @@ private fun ClearTmdbApiDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .width(600.dp)
-                .padding(32.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
                 .focusProperties {
                     canFocus = true
                     // 焦点陷阱：防止焦点从该对话框“跑出去”
@@ -1631,7 +1826,7 @@ private fun ClearTmdbApiDialog(
         ) {
             Column(
                 modifier = Modifier
-                    .padding(32.dp)
+                    .padding(DialogDimens.CardPaddingInner)
                     .focusGroup()
             ) {
                 Text(
@@ -1776,9 +1971,9 @@ private fun MediaTypeSortDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .width(700.dp)
-                .height(600.dp)
-                .padding(32.dp)
+                .width(DialogDimens.CardWidthSort)
+                .height(DialogDimens.CardHeightSort)
+                .padding(DialogDimens.CardPaddingOuter)
                 .focusProperties {
                     // 禁止焦点向外移动，实现焦点陷阱
                     canFocus = true
@@ -1787,7 +1982,7 @@ private fun MediaTypeSortDialog(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(32.dp)
+                    .padding(DialogDimens.CardPaddingInner)
             ) {
                 // 标题栏（固定）
                 Row(
@@ -2068,15 +2263,15 @@ private fun ClassificationStrategyDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .width(720.dp)
-                .height(420.dp)
-                .padding(32.dp)
+                .width(DialogDimens.CardWidthClassification)
+                .height(DialogDimens.CardHeightClassification)
+                .padding(DialogDimens.CardPaddingOuter)
                 .focusProperties { canFocus = true }
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(32.dp)
+                    .padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = "媒体类型识别策略",
@@ -2273,6 +2468,7 @@ private fun LiveSettingsSection() {
     var showUaHistory by remember { mutableStateOf(false) }
     var showWebConfigQr by remember { mutableStateOf(false) }
     var showLiveWebConfigSuccessHint by remember { mutableStateOf(false) }
+    var showAutoRefreshMenu by remember { mutableStateOf(false) }
     var pendingLiveWebPushKind by remember { mutableStateOf(LiveWebPushSuccessKind.MIXED) }
     
     // 收集当前设置值
@@ -2284,7 +2480,9 @@ private fun LiveSettingsSection() {
     val epgEnable by liveSettingsPreferences.epgEnable.collectAsState(initial = true)
     val autoEnterLive by liveSettingsPreferences.autoEnterLive.collectAsState(initial = false)
     val bootStartup by liveSettingsPreferences.bootStartup.collectAsState(initial = false)
-    val autoRefreshInterval by liveSettingsPreferences.autoRefreshInterval.collectAsState(initial = 0)
+    val autoRefreshInterval by liveSettingsPreferences.autoRefreshInterval.collectAsState(
+        initial = LiveSettingsPreferences.DEFAULT_AUTO_REFRESH_INTERVAL_HOURS
+    )
     val liveSourceHistory by liveSettingsPreferences.liveSourceHistory.collectAsState(initial = emptySet())
     val epgUrlHistory by liveSettingsPreferences.epgUrlHistory.collectAsState(initial = emptySet())
     val userAgentHistory by liveSettingsPreferences.userAgentHistory.collectAsState(initial = emptySet())
@@ -2327,8 +2525,10 @@ private fun LiveSettingsSection() {
         }
     }
     
+    val liveSectionS = LocalCompactUiScale.current
+    val liveCardGap = 16.dp.scale(liveSectionS)
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(liveCardGap)
     ) {
         // 直播源配置卡片
         LiveSettingListCard(
@@ -2336,6 +2536,11 @@ private fun LiveSettingsSection() {
             iconBackgroundColor = Color(0xFFf59e0b).copy(alpha = 0.2f),
             iconTint = Color(0xFFf59e0b),
             title = "直播源配置",
+            subtitle = if (liveSourceUrl.isBlank()) {
+                "未配置，点击选择历史记录或扫码添加"
+            } else {
+                liveSourceUrl
+            },
             onClick = { showLiveSourceHistory = true },
             isFirstItem = true
         )
@@ -2346,6 +2551,7 @@ private fun LiveSettingsSection() {
             iconBackgroundColor = Color(0xFF60a5fa).copy(alpha = 0.2f),
             iconTint = Color(0xFF60a5fa),
             title = "节目单配置",
+            subtitle = if (epgUrl.isBlank()) "未配置节目单地址" else epgUrl,
             onClick = { showEpgHistory = true }
         )
         
@@ -2355,10 +2561,11 @@ private fun LiveSettingsSection() {
             iconBackgroundColor = Color(0xFF34d399).copy(alpha = 0.2f),
             iconTint = Color(0xFF34d399),
             title = "自定义 User-Agent",
+            subtitle = if (userAgent.isBlank()) "未配置，将使用默认 UA" else userAgent,
             onClick = { showUaHistory = true }
         )
         
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp.scale(liveSectionS)))
         
         // 开关设置 - 使用卡片样式
         // 换台反转
@@ -2382,7 +2589,7 @@ private fun LiveSettingsSection() {
             }
         )
 
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(2.dp.scale(liveSectionS)))
 
         // 数字选台
         SettingListItem(
@@ -2405,7 +2612,7 @@ private fun LiveSettingsSection() {
             }
         )
 
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(2.dp.scale(liveSectionS)))
 
         // 启用节目单
         SettingListItem(
@@ -2428,7 +2635,7 @@ private fun LiveSettingsSection() {
             }
         )
 
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(2.dp.scale(liveSectionS)))
 
         // 打开APP直接进入直播界面
         SettingListItem(
@@ -2451,7 +2658,7 @@ private fun LiveSettingsSection() {
             }
         )
 
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(2.dp.scale(liveSectionS)))
 
         // 开机启动
         SettingListItem(
@@ -2474,55 +2681,84 @@ private fun LiveSettingsSection() {
             }
         )
 
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(2.dp.scale(liveSectionS)))
 
-        // 定时刷新直播源
+        // 定时刷新直播源：药丸按钮 + 下拉（样式见参考图）
         SettingListItem(
             title = "定时刷新直播源",
             subtitle = "每隔指定时间自动刷新直播源（当前：${if (autoRefreshInterval > 0) "${autoRefreshInterval}小时" else "已关闭"}）",
-            trailing = { itemFocused ->
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // 选项按钮：关闭、1小时、2小时、4小时、6小时、12小时
-                    listOf(0, 1, 2, 4, 6, 12).forEach { hours ->
-                        val label = if (hours == 0) "关闭" else "${hours}h"
-                        val isSelected = autoRefreshInterval == hours
-                        androidx.tv.material3.Button(
-                            onClick = { scope.launch { liveSettingsPreferences.setAutoRefreshInterval(hours) } },
-                            colors = androidx.tv.material3.ButtonDefaults.colors(
-                                containerColor = if (isSelected) com.lomen.tv.ui.theme.PrimaryYellow else Color(0xFF333333),
-                                contentColor = if (isSelected) Color.Black else Color.White,
-                            ),
-                            shape = androidx.tv.material3.ButtonDefaults.shape(
-                                shape = RoundedCornerShape(8.dp)
-                            ),
-                            modifier = Modifier
-                                .height(36.dp)
-                                .then(
-                                    if (isSelected) {
-                                        Modifier.border(
-                                            width = 2.dp,
-                                            color = Color(0xFFB8860B), // 深金色描边
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                    } else {
-                                        Modifier
-                                    }
-                                )
+            trailing = { _ ->
+                val intervalLabel =
+                    if (autoRefreshInterval > 0) "${autoRefreshInterval}小时" else "关闭"
+                val density = LocalDensity.current
+                // BottomEnd：先整体上移「药丸高度 + 空隙」，再叠加额外平移（每次重算，避免 remember 只依赖 density 导致改 dp 不生效）
+                val popupOffset = with(density) {
+                    IntOffset(
+                        x = AutoRefreshPopupExtraOffsetX.roundToPx(),
+                        y = -(AutoRefreshTriggerHeight + AutoRefreshMenuGapAboveTrigger).roundToPx() +
+                            AutoRefreshPopupExtraOffsetY.roundToPx()
+                    )
+                }
+                Box(modifier = Modifier.wrapContentSize(Alignment.TopEnd)) {
+                    Button(
+                        onClick = { showAutoRefreshMenu = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        colors = ButtonDefaults.colors(
+                            containerColor = AutoRefreshTriggerPillIdleColor,
+                            contentColor = Color.White,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = Color.Black,
+                            pressedContainerColor = PrimaryYellow,
+                            pressedContentColor = Color.Black
+                        ),
+                        shape = ButtonDefaults.shape(shape = AutoRefreshPillShape),
+                        modifier = Modifier
+                            .defaultMinSize(minWidth = 0.dp, minHeight = 0.dp)
+                            .height(AutoRefreshTriggerHeight)
+                            .wrapContentWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            Text(label, fontSize = 12.sp)
+                            Text(
+                                text = intervalLabel,
+                                fontSize = AutoRefreshTriggerTextSize,
+                                lineHeight = AutoRefreshTriggerLineHeight,
+                                maxLines = 1
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "选择刷新间隔",
+                                modifier = Modifier.size(AutoRefreshTriggerIconSize)
+                            )
+                        }
+                    }
+                    if (showAutoRefreshMenu) {
+                        Popup(
+                            alignment = Alignment.BottomEnd,
+                            offset = popupOffset,
+                            onDismissRequest = { showAutoRefreshMenu = false },
+                            properties = PopupProperties(
+                                focusable = true,
+                                dismissOnBackPress = true,
+                                dismissOnClickOutside = false
+                            )
+                        ) {
+                            AutoRefreshIntervalDropdownMenu(
+                                selectedHours = autoRefreshInterval,
+                                onSelect = { hours ->
+                                    scope.launch {
+                                        liveSettingsPreferences.setAutoRefreshInterval(hours)
+                                    }
+                                },
+                                onDismiss = { showAutoRefreshMenu = false }
+                            )
                         }
                     }
                 }
             },
-            onClick = {
-                // 循环切换：0 -> 1 -> 2 -> 4 -> 6 -> 12 -> 0
-                val options = listOf(0, 1, 2, 4, 6, 12)
-                val currentIndex = options.indexOf(autoRefreshInterval)
-                val nextIndex = (currentIndex + 1) % options.size
-                scope.launch { liveSettingsPreferences.setAutoRefreshInterval(options[nextIndex]) }
-            }
+            onClick = { showAutoRefreshMenu = true }
         )
     }
     
@@ -2667,11 +2903,11 @@ private fun LiveSourceSettingsDialog(
             onClick = {},
             colors = CardDefaults.colors(containerColor = SurfaceDark),
             modifier = Modifier
-                .width(600.dp)
-                .padding(24.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp)
+                modifier = Modifier.padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = "配置直播源",
@@ -2768,11 +3004,11 @@ private fun EpgUrlSettingsDialog(
             onClick = {},
             colors = CardDefaults.colors(containerColor = SurfaceDark),
             modifier = Modifier
-                .width(600.dp)
-                .padding(24.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp)
+                modifier = Modifier.padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = "配置节目单",
@@ -2869,11 +3105,11 @@ private fun UserAgentSettingsDialog(
             onClick = {},
             colors = CardDefaults.colors(containerColor = SurfaceDark),
             modifier = Modifier
-                .width(600.dp)
-                .padding(24.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp)
+                modifier = Modifier.padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = "配置 User-Agent",
@@ -2967,11 +3203,11 @@ private fun WebConfigInfoDialog(
             onClick = {},
             colors = CardDefaults.colors(containerColor = SurfaceDark),
             modifier = Modifier
-                .width(600.dp)
-                .padding(24.dp)
+                .width(DialogDimens.CardWidthStandard)
+                .padding(DialogDimens.CardPaddingOuter)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp)
+                modifier = Modifier.padding(DialogDimens.CardPaddingInner)
             ) {
                 Text(
                     text = "网页端配置",

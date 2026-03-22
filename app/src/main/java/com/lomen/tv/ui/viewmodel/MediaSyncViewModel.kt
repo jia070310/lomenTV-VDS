@@ -5,10 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
+import com.lomen.tv.data.preferences.TmdbApiPreferences
 import com.lomen.tv.data.scraper.FileFingerprintManager
 import com.lomen.tv.data.scraper.MediaScraper
 import com.lomen.tv.data.scraper.ScrapedMedia
 import com.lomen.tv.data.scraper.SmartMediaScraper
+import com.lomen.tv.data.scraper.TmdbScraper
 import com.lomen.tv.data.webdav.WebDavClient
 import com.lomen.tv.data.webdav.WebDavFile
 import com.lomen.tv.domain.model.ResourceLibrary
@@ -17,13 +19,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
 class MediaSyncViewModel @Inject constructor(
-    private val webDavMediaDao: WebDavMediaDao
+    private val webDavMediaDao: WebDavMediaDao,
+    private val tmdbApiPreferences: TmdbApiPreferences
 ) : ViewModel() {
 
     companion object {
@@ -48,11 +52,29 @@ class MediaSyncViewModel @Inject constructor(
     }
 
     /**
+     * 至少配置 API Key 或 Read Token 其一，且同步到 [TmdbScraper] 后再刮削。
+     */
+    private suspend fun ensureTmdbForScrape(): Boolean {
+        val key = tmdbApiPreferences.apiKey.first()
+        val token = tmdbApiPreferences.apiReadToken.first()
+        if (key.isBlank() && token.isBlank()) {
+            _syncState.value = SyncState.Error(TmdbApiPreferences.MSG_TMDB_REQUIRED_FOR_SCAN)
+            return false
+        }
+        TmdbScraper.getInstance().setApiKey(
+            key.takeIf { it.isNotBlank() },
+            token.takeIf { it.isNotBlank() }
+        )
+        return true
+    }
+
+    /**
      * 全量同步 - 清空后重新刮削所有文件
      */
     fun syncLibrary(library: ResourceLibrary) {
         viewModelScope.launch {
             try {
+                if (!ensureTmdbForScrape()) return@launch
                 Log.d(TAG, "开始全量同步资源库: ${library.name}")
                 _syncState.value = SyncState.Scanning
                 _syncProgress.value = 0 to 0
@@ -107,6 +129,7 @@ class MediaSyncViewModel @Inject constructor(
     fun syncLibraryIncremental(library: ResourceLibrary) {
         viewModelScope.launch {
             try {
+                if (!ensureTmdbForScrape()) return@launch
                 Log.d(TAG, "开始增量同步资源库: ${library.name}")
                 _syncState.value = SyncState.Scanning
                 _syncProgress.value = 0 to 0

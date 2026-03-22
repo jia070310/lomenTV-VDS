@@ -91,6 +91,7 @@ import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
 import com.lomen.tv.ui.theme.TextSecondary
+import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.domain.model.ResourceLibrary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -165,7 +166,7 @@ private fun WebDavEditForm(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.6f))
-                .padding(32.dp),
+                .padding(DialogDimens.WebDavBoxPadding),
             contentAlignment = Alignment.Center
         ) {
             Card(
@@ -174,8 +175,8 @@ private fun WebDavEditForm(
                     containerColor = SurfaceDark
                 ),
                 modifier = Modifier
-                    .widthIn(min = 480.dp, max = 560.dp)
-                    .heightIn(max = 800.dp)
+                    .widthIn(min = DialogDimens.WebDavFormWidthMin, max = DialogDimens.WebDavFormWidthMax)
+                    .heightIn(max = DialogDimens.WebDavFormHeightMax)
                     .onPreviewKeyEvent { keyEvent ->
                         if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
                             onDismiss()
@@ -709,11 +710,11 @@ private fun WebDavQrCodeConfig(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .width(320.dp)  // 缩小宽度
-                .height(365.dp),  // 缩小高度
+                .width(DialogDimens.QrCardWidth)
+                .height(DialogDimens.QrCardHeight),
         ) {
         Column(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier.padding(DialogDimens.QrCardPadding),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // 标题栏
@@ -829,10 +830,10 @@ private fun QrCodeView(
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.6f)
-                .heightIn(max = 180.dp)
+                .heightIn(max = DialogDimens.QrImageMaxHeight)
                 .clip(RoundedCornerShape(12.dp))
                 .background(androidx.compose.ui.graphics.Color.White)
-                .padding(10.dp),
+                .padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
             qrCodeBitmap?.let { bitmap ->
@@ -1419,7 +1420,7 @@ fun WebDavServerAddedHintDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .widthIn(min = 260.dp, max = 400.dp)
+                .widthIn(min = DialogDimens.SuccessHintWidthMin, max = DialogDimens.SuccessHintWidthMax)
                 .padding(12.dp)
                 .onPreviewKeyEvent { keyEvent ->
                     if (keyEvent.key in listOf(
@@ -1553,7 +1554,7 @@ private fun ErrorDialog(
                 focusedContainerColor = SurfaceDark
             ),
             modifier = Modifier
-                .widthIn(min = 280.dp, max = 360.dp)
+                .widthIn(min = DialogDimens.ErrorOverlayWidthMin, max = DialogDimens.ErrorOverlayWidthMax)
                 .padding(24.dp)
                 .focusProperties {
                     canFocus = true

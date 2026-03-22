@@ -32,6 +32,9 @@ class TmdbApiPreferences @Inject constructor(
         // 不再提供默认 API Key，用户必须自行配置
         const val DEFAULT_API_KEY = ""
         const val DEFAULT_API_READ_TOKEN = ""
+
+        /** API Key 与 Read Token 均为空时，扫描/刮削入口提示 */
+        const val MSG_TMDB_REQUIRED_FOR_SCAN = "没有配置TMDB API，请配置好后开始扫描刮削。"
     }
     
     /**

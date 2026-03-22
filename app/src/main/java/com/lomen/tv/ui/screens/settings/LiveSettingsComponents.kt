@@ -72,6 +72,10 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.lomen.tv.ui.LocalCompactUiScale
+import com.lomen.tv.ui.DialogDimens
+import com.lomen.tv.ui.scale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.tv.foundation.lazy.list.TvLazyColumn
@@ -181,8 +185,8 @@ fun QrCodeDialog(
                         focusedContainerColor = SurfaceDark
                     ),
                     modifier = modifier
-                        .width(320.dp)  // 缩小宽度
-                        .height(365.dp)  // 缩小高度
+                        .width(DialogDimens.QrCardWidth)
+                        .height(DialogDimens.QrCardHeight)
                         .onPreviewKeyEvent { keyEvent ->
                             // 拦截所有方向键，防止光标移出窗口
                             if (keyEvent.key == Key.DirectionUp ||
@@ -201,7 +205,7 @@ fun QrCodeDialog(
                         }
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier.padding(DialogDimens.QrCardPadding),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // 标题栏 - 右上角关闭按钮
@@ -256,7 +260,7 @@ fun QrCodeDialog(
                             text = text,
                             modifier = Modifier
                                 .fillMaxWidth(0.55f)
-                                .heightIn(max = 160.dp)
+                                .heightIn(max = DialogDimens.QrImageMaxHeight)
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -380,7 +384,7 @@ fun LiveWebConfigSuccessHintDialog(
                     focusedContainerColor = SurfaceDark
                 ),
                 modifier = Modifier
-                    .widthIn(min = 260.dp, max = 400.dp)
+                    .widthIn(min = DialogDimens.SuccessHintWidthMin, max = DialogDimens.SuccessHintWidthMax)
                     .padding(12.dp)
                     .focusProperties {
                         canFocus = true
@@ -493,7 +497,7 @@ fun <T> HistoryListDialog(
                 dismissOnBackPress = !isSubDialogShowing,
                 dismissOnClickOutside = false
             ),
-            modifier = modifier.width(600.dp),
+            modifier = modifier.width(DialogDimens.CardWidthHistoryList),
             onDismissRequest = { 
                 if (!isSubDialogShowing) {
                     onDismissRequest()
@@ -529,8 +533,8 @@ fun <T> HistoryListDialog(
                     state = TvLazyListState(
                         max(0, currentIndex - 2),
                     ),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     items(items) { item ->
                         val focusRequester = remember { FocusRequester() }
@@ -774,8 +778,7 @@ fun <T> HistoryListDialog(
 }
 
 /**
- * 直播设置列表项卡片
- * 高亮时图标和文字都变为黑色
+ * 直播设置列表项卡片（与设置页大卡片统一：左图标、右标题+副标题、固定高度与紧凑缩放）
  */
 @Composable
 fun LiveSettingListCard(
@@ -783,11 +786,13 @@ fun LiveSettingListCard(
     iconBackgroundColor: Color,
     iconTint: Color,
     title: String,
+    subtitle: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     trailingContent: @Composable (() -> Unit)? = null,
     isFirstItem: Boolean = false
 ) {
+    val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     
@@ -811,6 +816,7 @@ fun LiveSettingListCard(
         ),
         modifier = modifier
             .fillMaxWidth()
+            .height(84.dp.scale(s))
             .focusRequester(focusRequester)
             .onFocusChanged { focusState ->
                 isFocused = focusState.isFocused
@@ -818,15 +824,14 @@ fun LiveSettingListCard(
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .fillMaxSize()
+                .padding(horizontal = 16.dp.scale(s), vertical = 12.dp.scale(s)),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 图标
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(40.dp.scale(s))
+                    .clip(RoundedCornerShape(10.dp.scale(s)))
                     .background(iconBackgroundColor),
                 contentAlignment = Alignment.Center
             ) {
@@ -834,21 +839,36 @@ fun LiveSettingListCard(
                     imageVector = icon,
                     contentDescription = null,
                     tint = if (isFocused) Color.Black else iconTint,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(22.dp.scale(s))
                 )
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(14.dp.scale(s)))
 
-            // 文字内容 - 只显示标题
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (isFocused) Color.Black else TextPrimary,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s).sp
+                    ),
+                    color = if (isFocused) Color.Black else TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (subtitle.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(2.dp.scale(s)))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                        ),
+                        color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
 
-            // 尾部内容
             trailingContent?.invoke()
         }
     }

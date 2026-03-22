@@ -69,6 +69,7 @@ import com.lomen.tv.data.model.live.LiveChannel
 import com.lomen.tv.ui.live.utils.handleLiveKeyEvents
 import com.lomen.tv.ui.screens.settings.LiveWebConfigSuccessHintDialog
 import com.lomen.tv.ui.screens.settings.QrCodeDialog
+import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.theme.LomenTVTheme
 import com.lomen.tv.ui.theme.PrimaryYellow
 
@@ -645,8 +646,8 @@ private fun LiveSourceDialog(
         ) {
             Surface(
                 modifier = Modifier
-                    .width(320.dp)
-                    .height(320.dp)
+                    .width(DialogDimens.LiveSourcePanelSize)
+                    .height(DialogDimens.LiveSourcePanelSize)
                     .padding(top = 50.dp, end = 50.dp),
                 shape = RoundedCornerShape(8.dp),
                 tonalElevation = 0.dp,

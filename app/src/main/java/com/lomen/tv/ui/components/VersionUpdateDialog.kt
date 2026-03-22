@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.lomen.tv.domain.model.VersionInfo
+import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.theme.PrimaryYellow
 import androidx.tv.material3.*
 
@@ -60,8 +61,8 @@ fun VersionUpdateDialog(
         ) {
             Card(
                 modifier = Modifier
-                    .width(600.dp)
-                    .heightIn(min = 400.dp, max = 600.dp)
+                    .width(DialogDimens.VersionUpdateWidth)
+                    .heightIn(min = DialogDimens.VersionUpdateHeightMin, max = DialogDimens.VersionUpdateHeightMax)
                     .onPreviewKeyEvent { keyEvent ->
                         // 拦截方向键和返回键
                         if (keyEvent.type == KeyEventType.KeyUp) {
