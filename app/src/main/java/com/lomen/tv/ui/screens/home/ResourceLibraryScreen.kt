@@ -1,6 +1,8 @@
 package com.lomen.tv.ui.screens.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -17,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
@@ -25,6 +29,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
@@ -38,10 +43,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -49,10 +60,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.items
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -60,6 +70,7 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.IconButton
+import androidx.tv.material3.IconButtonDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.lomen.tv.domain.model.ResourceLibrary
@@ -96,8 +107,8 @@ private val TextZinc400 = Color(0xFFA1A1AA)
 private val TextZinc500 = Color(0xFF71717A)
 private val TextZinc600 = Color(0xFF52525B)
 
-/** 资源库列表单行高度基准（再乘紧凑缩放）；缩小以在分区内约显示两行 */
-private val LibraryListRowHeightBase = 62.dp
+/** 资源库列表单行高度基准（再乘紧凑缩放）；与设置中心主按钮高度保持一致 */
+private val LibraryListRowHeightBase = 88.dp
 private val LibraryListVerticalGapBase = 8.dp
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -116,6 +127,9 @@ fun ResourceLibraryScreen(
     onNavigateToSettings: () -> Unit = {}
 ) {
     val listFocusRequester = remember { FocusRequester() }
+    val lastLibraryRowFocusRequester = remember { FocusRequester() }
+    val addLibraryFocusRequester = remember { FocusRequester() }
+    val backButtonFocusRequester = remember { FocusRequester() }
     var checkingLibraryId by remember { mutableStateOf<String?>(null) }
     var checkResult by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -176,8 +190,12 @@ fun ResourceLibraryScreen(
     val compactScale = remember(configuration.screenHeightDp, configuration.screenWidthDp) {
         computeCompactUiScale(configuration.screenHeightDp, configuration.screenWidthDp)
     }
+    // 资源库主界面整体放大：高分屏更易读，低分屏保持紧凑不溢出
+    val resourceLibraryScale = remember(compactScale) {
+        if (compactScale >= 1f) 1.12f else (compactScale * 1.08f).coerceAtMost(1f)
+    }
 
-    CompositionLocalProvider(LocalCompactUiScale provides compactScale) {
+    CompositionLocalProvider(LocalCompactUiScale provides resourceLibraryScale) {
     Box(modifier = Modifier.fillMaxSize()) {
         // 主布局 - 左右分栏
         Row(
@@ -189,6 +207,9 @@ fun ResourceLibraryScreen(
             Sidebar(
                 onNavigateBack = onNavigateBack,
                 onNavigateToSettings = onNavigateToSettings,
+                backButtonFocusRequester = backButtonFocusRequester,
+                addLibraryFocusRequester = addLibraryFocusRequester,
+                listFocusRequester = listFocusRequester,
                 modifier = Modifier.width(280.dp.scale(compactScale))
             )
 
@@ -204,6 +225,9 @@ fun ResourceLibraryScreen(
                 checkingLibraryId = checkingLibraryId,
                 checkResult = checkResult,
                 listFocusRequester = listFocusRequester,
+                lastLibraryRowFocusRequester = lastLibraryRowFocusRequester,
+                addLibraryFocusRequester = addLibraryFocusRequester,
+                backButtonFocusRequester = backButtonFocusRequester,
                 onLibrarySelected = onLibrarySelected,
                 onNavigateBack = onNavigateBack,
                 onAddLibrary = onAddLibrary,
@@ -262,6 +286,9 @@ fun ResourceLibraryScreen(
 private fun Sidebar(
     onNavigateBack: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    backButtonFocusRequester: FocusRequester,
+    addLibraryFocusRequester: FocusRequester,
+    listFocusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
     val s = LocalCompactUiScale.current
@@ -269,79 +296,120 @@ private fun Sidebar(
         modifier = modifier
             .fillMaxHeight()
             .background(SidebarBackground)
-            .padding(32.dp.scale(s)),
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(24.dp.scale(s))
     ) {
-        // 顶部标题区域
-        Column {
+        // 返回按钮和标题（与设置中心左栏一致）
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 32.dp.scale(s))
+        ) {
+            IconButton(
+                onClick = onNavigateBack,
+                colors = IconButtonDefaults.colors(
+                    containerColor = Color.Transparent,
+                    contentColor = TextPrimary,
+                    focusedContainerColor = PrimaryYellow,
+                    focusedContentColor = BackgroundDark
+                ),
+                modifier = Modifier
+                    .size(48.dp.scale(s))
+                    .focusRequester(backButtonFocusRequester)
+                    .focusProperties {
+                        right = listFocusRequester
+                    }
+                    .onPreviewKeyEvent { e ->
+                        if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (e.key) {
+                            Key.DirectionLeft -> {
+                                // 返回按钮上不允许左键跳转到“添加新资源库”
+                                true
+                            }
+                            Key.DirectionRight -> {
+                                listFocusRequester.requestFocus()
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回",
+                    modifier = Modifier.size(28.dp.scale(s))
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp.scale(s)))
+
+            Box(
+                modifier = Modifier
+                    .size(40.dp.scale(s))
+                    .clip(RoundedCornerShape(12.dp.scale(s)))
+                    .background(PrimaryYellow),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = BackgroundDark,
+                    modifier = Modifier.size(24.dp.scale(s))
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp.scale(s)))
+
             Text(
                 text = "资源库",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontSize = (MaterialTheme.typography.headlineLarge.fontSize.value * s).sp
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontSize = (MaterialTheme.typography.headlineMedium.fontSize.value * s + 2f).sp
                 ),
-                color = Color.White,
-                fontWeight = FontWeight.Black
-            )
-
-            Spacer(modifier = Modifier.height(48.dp.scale(s)))
-
-            // 导航菜单
-            NavigationItem(
-                icon = Icons.Default.Menu,
-                label = "资源库",
-                isSelected = true,
-                onClick = { }
-            )
-
-            NavigationItem(
-                icon = Icons.Default.Home,
-                label = "首页",
-                isSelected = false,
-                onClick = onNavigateBack
-            )
-
-            NavigationItem(
-                icon = Icons.Default.Settings,
-                label = "设置",
-                isSelected = false,
-                onClick = onNavigateToSettings
+                color = TextPrimary
             )
         }
 
-        // 底部时间卡片 - 动态显示当前时间
+        Spacer(modifier = Modifier.height(16.dp.scale(s)))
+
+        // 导航菜单
+        NavigationItem(
+            icon = Icons.Default.Menu,
+            label = "资源库",
+            isSelected = true,
+            onClick = { }
+        )
+
+        NavigationItem(
+            icon = Icons.Default.Home,
+            label = "首页",
+            isSelected = false,
+            onClick = onNavigateBack
+        )
+
+        NavigationItem(
+            icon = Icons.Default.Settings,
+            label = "设置",
+            isSelected = false,
+            onClick = onNavigateToSettings
+        )
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // 底部时间（与设置中心左栏一致）
         var currentTime by remember { mutableStateOf("") }
         LaunchedEffect(Unit) {
             while (true) {
-                val sdf = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
                 currentTime = sdf.format(Date())
                 kotlinx.coroutines.delay(60000) // 每分钟更新一次
             }
         }
-        GlassCard(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp.scale(s)),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Menu,
-                    contentDescription = null,
-                    tint = AccentYellow,
-                    modifier = Modifier.size(24.dp.scale(s))
-                )
-                Spacer(modifier = Modifier.width(12.dp.scale(s)))
-                Text(
-                    text = currentTime,
-                    style = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
-                    ),
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
+        Text(
+            text = "系统时间：$currentTime",
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
+            ),
+            color = TextMuted,
+            modifier = Modifier.padding(bottom = 16.dp.scale(s))
+        )
     }
 }
 
@@ -359,9 +427,9 @@ private fun NavigationItem(
     Button(
         onClick = onClick,
         colors = ButtonDefaults.colors(
-            containerColor = if (isFocused) FocusYellow else Color.Transparent,
-            contentColor = if (isSelected) AccentYellow else TextZinc500,
-            focusedContainerColor = FocusYellow,
+            containerColor = Color.Transparent,
+            contentColor = if (isSelected) PrimaryYellow else TextPrimary,
+            focusedContainerColor = PrimaryYellow,
             focusedContentColor = BackgroundDark
         ),
         shape = ButtonDefaults.shape(shape = RoundedCornerShape(16.dp.scale(s))),
@@ -373,22 +441,22 @@ private fun NavigationItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp.scale(s), vertical = 12.dp.scale(s)),
+                .padding(horizontal = 8.dp.scale(s), vertical = 13.dp.scale(s)),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 modifier = Modifier.size(24.dp.scale(s)),
-                tint = if (isFocused) BackgroundDark else if (isSelected) AccentYellow else TextZinc500
+                tint = if (isFocused) BackgroundDark else if (isSelected) PrimaryYellow else TextPrimary
             )
             Spacer(modifier = Modifier.width(16.dp.scale(s)))
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                    fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s + 2f).sp
                 ),
-                color = if (isFocused) BackgroundDark else if (isSelected) AccentYellow else TextZinc500,
+                color = if (isFocused) BackgroundDark else if (isSelected) PrimaryYellow else TextPrimary,
                 fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
             )
         }
@@ -408,6 +476,9 @@ private fun MainContent(
     checkingLibraryId: String?,
     checkResult: Map<String, Boolean>,
     listFocusRequester: FocusRequester,
+    lastLibraryRowFocusRequester: FocusRequester,
+    addLibraryFocusRequester: FocusRequester,
+    backButtonFocusRequester: FocusRequester,
     onLibrarySelected: (ResourceLibrary) -> Unit,
     onNavigateBack: () -> Unit,
     onAddLibrary: () -> Unit,
@@ -468,33 +539,39 @@ private fun MainContent(
             val webDavLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.WEBDAV }
             val quarkLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.QUARK }
             val firstFocusableLibraryId = webDavLibraries.firstOrNull()?.id ?: quarkLibraries.firstOrNull()?.id
+            val lastLibraryId: String? =
+                if (quarkLibraries.isNotEmpty()) quarkLibraries.last().id else webDavLibraries.lastOrNull()?.id
+            val addButtonUpTarget: FocusRequester =
+                if (firstFocusableLibraryId != null && firstFocusableLibraryId == lastLibraryId) {
+                    listFocusRequester
+                } else {
+                    lastLibraryRowFocusRequester
+                }
 
             val libRowH = LibraryListRowHeightBase.scale(s)
             val libGap = LibraryListVerticalGapBase.scale(s)
-            // 每区列表可视高度 ≈ 两行 + 行间距，超出部分在分区内滚动
             val libListViewportH = libRowH + libGap + libRowH
+            val scrollState = rememberScrollState()
 
-            // 上下分区：列表固定可视两行，网盘区与 WEBDAV 之间留白；底部留白把「添加」按钮顶在下方
+            // 整页竖向滚动，便于看到全部列表与底部「添加」；焦点链：末行下→添加，添加上→末行，添加右→侧栏返回，返回左→添加
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .verticalScroll(scrollState)
             ) {
-                // WEBDAV本地区
                 Column(modifier = Modifier.fillMaxWidth()) {
                     SectionTitle(title = "WEBDAV本地区", accentColor = AccentYellow)
                     Spacer(modifier = Modifier.height(10.dp.scale(s)))
                     if (webDavLibraries.isNotEmpty()) {
-                        TvLazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(libListViewportH),
-                            verticalArrangement = Arrangement.spacedBy(libGap),
-                            pivotOffsets = androidx.tv.foundation.PivotOffsets(parentFraction = 0.15f)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(libGap)
                         ) {
-                            items(webDavLibraries) { library ->
+                            webDavLibraries.forEach { library ->
                                 val isChecking = checkingLibraryId == library.id
                                 val isConnected = checkResult[library.id]
+                                val isLastRow = library.id == lastLibraryId
                                 LibraryListItemV2(
                                     library = library,
                                     isSelected = library.id == currentLibraryId,
@@ -514,10 +591,17 @@ private fun MainContent(
                                     },
                                     onDelete = { onDeleteLibrary(library) },
                                     onEdit = { onEditLibrary(library) },
-                                    modifier = if (library.id == firstFocusableLibraryId) {
-                                        Modifier.focusRequester(listFocusRequester)
-                                    } else {
-                                        Modifier
+                                    isLastLibraryRow = isLastRow,
+                                    addLibraryDownTarget = addLibraryFocusRequester,
+                                    modifier = when {
+                                        library.id == firstFocusableLibraryId &&
+                                            firstFocusableLibraryId == lastLibraryId ->
+                                            Modifier.focusRequester(listFocusRequester)
+                                        library.id == firstFocusableLibraryId ->
+                                            Modifier.focusRequester(listFocusRequester)
+                                        library.id == lastLibraryId ->
+                                            Modifier.focusRequester(lastLibraryRowFocusRequester)
+                                        else -> Modifier
                                     }
                                 )
                             }
@@ -537,23 +621,20 @@ private fun MainContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(28.dp.scale(s)))
+                Spacer(modifier = Modifier.height(44.dp.scale(s)))
 
-                // 网盘区（下移，与 WEBDAV 列表区分更明显）
                 Column(modifier = Modifier.fillMaxWidth()) {
                     SectionTitle(title = "网盘区", accentColor = TextZinc600)
                     Spacer(modifier = Modifier.height(10.dp.scale(s)))
                     if (quarkLibraries.isNotEmpty()) {
-                        TvLazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(libListViewportH),
-                            verticalArrangement = Arrangement.spacedBy(libGap),
-                            pivotOffsets = androidx.tv.foundation.PivotOffsets(parentFraction = 0.15f)
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(libGap)
                         ) {
-                            items(quarkLibraries) { library ->
+                            quarkLibraries.forEach { library ->
                                 val isChecking = checkingLibraryId == library.id
                                 val isConnected = checkResult[library.id]
+                                val isLastRow = library.id == lastLibraryId
                                 LibraryCardV2(
                                     library = library,
                                     isSelected = library.id == currentLibraryId,
@@ -573,10 +654,17 @@ private fun MainContent(
                                     },
                                     onDelete = { onDeleteLibrary(library) },
                                     onEdit = { onEditLibrary(library) },
-                                    modifier = if (library.id == firstFocusableLibraryId) {
-                                        Modifier.focusRequester(listFocusRequester)
-                                    } else {
-                                        Modifier
+                                    isLastLibraryRow = isLastRow,
+                                    addLibraryDownTarget = addLibraryFocusRequester,
+                                    modifier = when {
+                                        library.id == firstFocusableLibraryId &&
+                                            firstFocusableLibraryId == lastLibraryId ->
+                                            Modifier.focusRequester(listFocusRequester)
+                                        library.id == firstFocusableLibraryId ->
+                                            Modifier.focusRequester(listFocusRequester)
+                                        library.id == lastLibraryId ->
+                                            Modifier.focusRequester(lastLibraryRowFocusRequester)
+                                        else -> Modifier
                                     }
                                 )
                             }
@@ -593,9 +681,22 @@ private fun MainContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(24.dp.scale(s)))
 
-                AddLibraryButtonV2(onClick = onAddLibrary)
+                // 底部留白避免焦点缩放/描边被父级裁切
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp.scale(s), vertical = 8.dp.scale(s))
+                ) {
+                    AddLibraryButtonV2(
+                        onClick = onAddLibrary,
+                        focusRequester = addLibraryFocusRequester,
+                        upFocus = addButtonUpTarget,
+                        leftFocus = backButtonFocusRequester
+                    )
+                }
+                Spacer(modifier = Modifier.height(24.dp.scale(s)))
             }
         }
     }
@@ -765,7 +866,9 @@ private fun LibraryCardV2(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isLastLibraryRow: Boolean = false,
+    addLibraryDownTarget: FocusRequester? = null
 ) {
     LibraryListItemV2(
         library = library,
@@ -776,7 +879,9 @@ private fun LibraryCardV2(
         onClick = onClick,
         onDelete = onDelete,
         onEdit = onEdit,
-        modifier = modifier
+        modifier = modifier,
+        isLastLibraryRow = isLastLibraryRow,
+        addLibraryDownTarget = addLibraryDownTarget
     )
 }
 
@@ -791,13 +896,21 @@ private fun LibraryListItemV2(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isLastLibraryRow: Boolean = false,
+    addLibraryDownTarget: FocusRequester? = null
 ) {
     val s = LocalCompactUiScale.current
     val rowH = LibraryListRowHeightBase.scale(s)
     var isFocused by remember { mutableStateOf(false) }
     var isEditFocused by remember { mutableStateOf(false) }
     var isDeleteFocused by remember { mutableStateOf(false) }
+    val downToAdd =
+        if (isLastLibraryRow && addLibraryDownTarget != null) {
+            Modifier.focusProperties { down = addLibraryDownTarget }
+        } else {
+            Modifier
+        }
 
     Row(
         modifier = modifier
@@ -820,6 +933,7 @@ private fun LibraryListItemV2(
             modifier = Modifier
                 .weight(1f)
                 .height(rowH)
+                .then(downToAdd)
                 .onFocusChanged { isFocused = it.isFocused }
         ) {
             Row(
@@ -872,18 +986,16 @@ private fun LibraryListItemV2(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (isSelected) {
-                            Spacer(modifier = Modifier.width(10.dp.scale(s)))
-                            Text(
-                                text = "当前",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s * 0.92f).sp
-                                ),
-                                color = if (isFocused) Color.Black else AccentYellow,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
                     }
+                }
+                if (isSelected) {
+                    Spacer(modifier = Modifier.width(8.dp.scale(s)))
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "当前选中",
+                        tint = if (isFocused) Color.Black else AccentYellow,
+                        modifier = Modifier.size(22.dp.scale(s))
+                    )
                 }
             }
         }
@@ -900,8 +1012,9 @@ private fun LibraryListItemV2(
                 pressedScale = 1.0f
             ),
             modifier = Modifier
-                .width(48.dp.scale(s))
+                .width(72.dp.scale(s))
                 .height(rowH)
+                .then(downToAdd)
                 .onFocusChanged { isEditFocused = it.isFocused }
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -926,8 +1039,9 @@ private fun LibraryListItemV2(
                 pressedScale = 1.0f
             ),
             modifier = Modifier
-                .width(48.dp.scale(s))
+                .width(72.dp.scale(s))
                 .height(rowH)
+                .then(downToAdd)
                 .onFocusChanged { isDeleteFocused = it.isFocused }
         ) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -993,7 +1107,10 @@ private fun StatusIndicator(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun AddLibraryButtonV2(
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
+    upFocus: FocusRequester? = null,
+    leftFocus: FocusRequester? = null
 ) {
     val s = LocalCompactUiScale.current
     var isFocused by remember { mutableStateOf(false) }
@@ -1010,10 +1127,32 @@ private fun AddLibraryButtonV2(
                 shape = RoundedCornerShape(16.dp.scale(s))
             )
         ),
-        scale = CardDefaults.scale(focusedScale = 1.02f),
+        // 不放大，避免在滚动区域内被裁切
+        scale = CardDefaults.scale(
+            scale = 1f,
+            focusedScale = 1f,
+            pressedScale = 1f
+        ),
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp.scale(s))
+            .heightIn(min = 64.dp.scale(s))
+            .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+            .focusProperties {
+                upFocus?.let { up = it }
+            }
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (e.key) {
+                    // 底部已在“添加新资源库”，按右键不做任何跳转
+                    Key.DirectionRight -> true
+                    // 从“添加新资源库”左键回到左侧功能区（返回按钮）
+                    Key.DirectionLeft -> {
+                        leftFocus?.requestFocus()
+                        true
+                    }
+                    else -> false
+                }
+            }
             .onFocusChanged { isFocused = it.isFocused }
             .then(
                 if (!isFocused) {
@@ -1029,7 +1168,9 @@ private fun AddLibraryButtonV2(
             )
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp.scale(s), vertical = 14.dp.scale(s)),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -1038,7 +1179,11 @@ private fun AddLibraryButtonV2(
                     fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
                 ),
                 color = if (isFocused) Color.White else TextZinc500,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }

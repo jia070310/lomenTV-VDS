@@ -35,9 +35,10 @@ object DialogDimens {
     val WebDavFormHeightMax = 680.dp
     val WebDavBoxPadding = 24.dp
 
-    val VersionUpdateWidth = 480.dp
-    val VersionUpdateHeightMin = 320.dp
-    val VersionUpdateHeightMax = 480.dp
+    // 版本更新对话框：发现尺寸异常后，统一调整为 380x350
+    val VersionUpdateWidth = 380.dp
+    val VersionUpdateHeightMin = 350.dp
+    val VersionUpdateHeightMax = 350.dp
 
     val ErrorOverlayWidthMin = 240.dp
     val ErrorOverlayWidthMax = 300.dp

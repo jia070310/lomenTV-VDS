@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Storage
@@ -282,32 +283,12 @@ private fun LibraryItem(
 
             // 信息
             Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = library.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextPrimary,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                    )
-                    if (isSelected) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(PrimaryYellow)
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "当前",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = BackgroundDark,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = library.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = TextPrimary,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = library.getDisplayUrl(),
@@ -315,6 +296,15 @@ private fun LibraryItem(
                     color = TextMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isSelected) {
+                Spacer(modifier = Modifier.width(12.dp))
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "当前选中",
+                    tint = if (isFocused) BackgroundDark else PrimaryYellow,
+                    modifier = Modifier.size(26.dp)
                 )
             }
         }

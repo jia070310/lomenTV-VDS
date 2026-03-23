@@ -530,7 +530,7 @@ private fun SettingsSidebar(
     val s = LocalCompactUiScale.current
     Column(
         modifier = Modifier
-            .width(240.dp.scale(s))
+            .width(280.dp.scale(s))
             .fillMaxHeight()
             .background(SurfaceDark)
             .padding(24.dp.scale(s))
@@ -580,7 +580,7 @@ private fun SettingsSidebar(
             Text(
                 text = "设置中心",
                 style = MaterialTheme.typography.headlineMedium.copy(
-                    fontSize = (MaterialTheme.typography.headlineMedium.fontSize.value * s).sp
+                    fontSize = (MaterialTheme.typography.headlineMedium.fontSize.value * s + 2f).sp
                 ),
                 color = TextPrimary
             )
@@ -616,7 +616,7 @@ private fun SettingsSidebar(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp.scale(s), vertical = 12.dp.scale(s))
+                        .padding(horizontal = 8.dp.scale(s), vertical = 13.dp.scale(s))
                 ) {
                     Icon(
                         imageVector = category.icon,
@@ -632,7 +632,7 @@ private fun SettingsSidebar(
                     Text(
                         text = category.name,
                         style = MaterialTheme.typography.bodyLarge.copy(
-                            fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                            fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s + 2f).sp
                         ),
                         color = when {
                             isFocused -> BackgroundDark
@@ -668,7 +668,7 @@ private fun SettingsSidebar(
         Text(
             text = "系统时间：$currentTime",
             style = MaterialTheme.typography.bodySmall.copy(
-                fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
             ),
             color = TextMuted,
             modifier = Modifier.padding(bottom = 16.dp.scale(s)) // 增加底部内边距，避免被截断
@@ -799,7 +799,7 @@ private fun SectionTitle(title: String, accentColor: Color) {
         Text(
             text = title,
             style = MaterialTheme.typography.headlineSmall.copy(
-                fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+                fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s + 2f).sp
             ),
             color = TextPrimary
         )
@@ -1181,7 +1181,7 @@ private fun AboutSection(
                 Text(
                     text = "柠檬TV",
                     style = MaterialTheme.typography.headlineSmall.copy(
-                        fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.headlineSmall.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black else TextPrimary
                 )
@@ -1189,7 +1189,7 @@ private fun AboutSection(
                 Text(
                     text = "一款专为Android TV设计的视频播放器，支持WebDAV网盘资源导入、IPTV直播、智能跳过片头片尾、记忆续播等功能。",
                     style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = (MaterialTheme.typography.bodyMedium.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodyMedium.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary
                 )
@@ -1197,7 +1197,7 @@ private fun AboutSection(
                 Text(
                     text = "GitHub: https://github.com/jia070310/lomenTV-VDS",
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
@@ -1205,7 +1205,7 @@ private fun AboutSection(
                 Text(
                     text = "© 2026 柠檬TV 版权所有",
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
@@ -1249,14 +1249,14 @@ private fun SettingCard(
             pressedScale = 1.0f
         ),
         modifier = modifier
-            .height(84.dp.scale(s))
+            .height(88.dp.scale(s))
             .focusRequester(focusRequester)
             .onFocusChanged { isFocused = it.isFocused }
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp.scale(s), vertical = 12.dp.scale(s)),
+                .padding(horizontal = 16.dp.scale(s), vertical = 13.dp.scale(s)),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -1280,7 +1280,7 @@ private fun SettingCard(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black else TextPrimary,
                     maxLines = 1,
@@ -1290,7 +1290,7 @@ private fun SettingCard(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.8f) else TextSecondary,
                     maxLines = 2,
@@ -1340,7 +1340,7 @@ private fun SettingListItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp.scale(s), vertical = 20.dp.scale(s)),
+                .padding(horizontal = 24.dp.scale(s), vertical = 22.dp.scale(s)),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1348,7 +1348,7 @@ private fun SettingListItem(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black else TextPrimary
                 )
@@ -1356,7 +1356,7 @@ private fun SettingListItem(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
@@ -1372,11 +1372,11 @@ private val autoRefreshIntervalOptions = listOf(0, 1, 2, 4, 6, 12)
 private val AutoRefreshTriggerPillIdleColor = Color(0xFF333333)
 
 /** 与直播设置项 Switch 行内高度接近；下拉内文字与触发器一致 */
-private val AutoRefreshTriggerTextSize = 12.sp
-private val AutoRefreshTriggerLineHeight = 15.sp
+private val AutoRefreshTriggerTextSize = 14.sp
+private val AutoRefreshTriggerLineHeight = 17.sp
 private val AutoRefreshTriggerIconSize = 16.dp
 /** TV Switch 轨道视觉约 32dp 高，药丸与之对齐 */
-private val AutoRefreshTriggerHeight = 32.dp
+private val AutoRefreshTriggerHeight = 34.dp
 
 private val AutoRefreshDropdownMenuWidth = 92.dp
 
@@ -1548,7 +1548,7 @@ private fun InfoCard(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodyLarge.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black else TextPrimary,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
@@ -1557,7 +1557,7 @@ private fun InfoCard(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s).sp
+                        fontSize = (MaterialTheme.typography.bodySmall.fontSize.value * s + 2f).sp
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
@@ -1573,7 +1573,7 @@ private fun InfoCard(
                     Text(
                         text = it,
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = (MaterialTheme.typography.labelSmall.fontSize.value * s).sp
+                            fontSize = (MaterialTheme.typography.labelSmall.fontSize.value * s + 2f).sp
                         ),
                         color = if (isFocused) Color.Black else PrimaryYellow,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold

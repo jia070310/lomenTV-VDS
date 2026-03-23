@@ -55,6 +55,7 @@ import com.lomen.tv.domain.model.ResourceLibrary
 import java.util.concurrent.TimeUnit
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -377,6 +378,10 @@ fun HomeScreen(
     val hasUpdate by versionUpdateViewModel.hasUpdate.collectAsState()
     val versionInfo by versionUpdateViewModel.versionInfo.collectAsState()
     var showVersionUpdateDialog by remember { mutableStateOf(false) }
+    val versionUpdateBadgeFocusRequester = remember { FocusRequester() }
+    var showTopVersionBadge by remember(versionInfo?.versionName, hasUpdate) {
+        mutableStateOf(true)
+    }
 
     // 启动时检测 TMDB API 配置
     LaunchedEffect(Unit) {
@@ -433,29 +438,9 @@ fun HomeScreen(
                 }
             }
     ) {
-        // 顶栏中央版本更新提示
-        val currentVersionInfo = versionInfo
-        if (hasUpdate && currentVersionInfo != null) {
-            var showTopBadge by remember { mutableStateOf(true) }
-            if (showTopBadge) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 24.dp),
-                    contentAlignment = Alignment.TopCenter
-                ) {
-                    VersionUpdateBadge(
-                        versionName = currentVersionInfo.versionName,
-                        onClick = { 
-                            showTopBadge = false
-                            showVersionUpdateDialog = true 
-                        },
-                        onDismiss = { showTopBadge = false }
-                    )
-                }
-            }
-        }
-        
+        val showVersionBadgeOverlay =
+            hasUpdate && versionInfo != null && showTopVersionBadge
+
         TvLazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -483,7 +468,9 @@ fun HomeScreen(
                     headerFocusRequesters = headerFocusRequesters,
                     fallbackContentFocusRequester = contentFocusRequester,
                     bottomNavigationFirstTabFocusRequester = bottomBarFirstTabFocusRequester,
-                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                    showVersionUpdateBadge = showVersionBadgeOverlay,
+                    versionUpdateBadgeFocusRequester = versionUpdateBadgeFocusRequester
                 )
             }
 
@@ -504,7 +491,9 @@ fun HomeScreen(
                         currentRowFocusRequesters = rowFocusRequesters.getOrNull(rowIndexCursor),
                         headerFocusRequesters = headerFocusRequesters,
                         isFirstContentRow = rowIndexCursor == 0,
-                        onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                        onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                        showTopVersionBadge = showVersionBadgeOverlay,
+                        topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                     )
                 }
                 rowIndexCursor++
@@ -532,7 +521,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -558,7 +549,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -584,7 +577,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -610,7 +605,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -636,7 +633,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -662,7 +661,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -688,7 +689,9 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) }
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    showTopVersionBadge = showVersionBadgeOverlay,
+                                    topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                                 )
                             }
                             item { Spacer(modifier = Modifier.height(32.dp)) }
@@ -728,6 +731,31 @@ fun HomeScreen(
             }
 
 
+        }
+
+        if (showVersionBadgeOverlay) {
+            val ver = versionInfo!!
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(20f)
+                    .fillMaxWidth()
+                    .padding(top = 24.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                VersionUpdateBadge(
+                    versionName = ver.versionName,
+                    onClick = {
+                        showTopVersionBadge = false
+                        showVersionUpdateDialog = true
+                    },
+                    onDismiss = { showTopVersionBadge = false },
+                    focusRequester = versionUpdateBadgeFocusRequester,
+                    headerFocusRequesters = headerFocusRequesters,
+                    focusedHeaderColumnIndex = focusedColumnIndex,
+                    modifier = Modifier
+                )
+            }
         }
 
         // Bottom Navigation - Fixed at bottom
@@ -846,7 +874,9 @@ private fun HomeHeader(
     headerFocusRequesters: List<FocusRequester>,
     fallbackContentFocusRequester: FocusRequester,
     bottomNavigationFirstTabFocusRequester: FocusRequester,
-    onFocusedColumnChanged: (Int) -> Unit
+    onFocusedColumnChanged: (Int) -> Unit,
+    showVersionUpdateBadge: Boolean = false,
+    versionUpdateBadgeFocusRequester: FocusRequester? = null
 ) {
     val hasContentRowBelow = !firstRowFocusRequesters.isNullOrEmpty()
     Row(
@@ -920,9 +950,13 @@ private fun HomeHeader(
                 modifier = Modifier
                     .focusRequester(headerFocusRequesters[0])
                     .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(0) }
+                    .focusProperties {
+                        if (showVersionUpdateBadge && versionUpdateBadgeFocusRequester != null) {
+                            left = versionUpdateBadgeFocusRequester
+                        }
+                    }
                     .onPreviewKeyEvent { keyEvent ->
                         when {
-                            keyEvent.key == Key.DirectionLeft && keyEvent.type == KeyEventType.KeyDown -> true
                             keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown -> {
                                 if (hasContentRowBelow) {
                                     requestFirstAvailableFocus(
@@ -932,6 +966,7 @@ private fun HomeHeader(
                                 } else {
                                     bottomNavigationFirstTabFocusRequester.tryRequestFocus()
                                 }
+                                true
                             }
                             else -> false
                         }
@@ -1156,7 +1191,9 @@ private fun RecentWatchingRow(
     currentRowFocusRequesters: List<FocusRequester>?,
     headerFocusRequesters: List<FocusRequester>,
     isFirstContentRow: Boolean,
-    onFocusedColumnChanged: (Int) -> Unit
+    onFocusedColumnChanged: (Int) -> Unit,
+    showTopVersionBadge: Boolean = false,
+    topVersionBadgeFocusRequester: FocusRequester? = null
 ) {
     val displayCount = watchHistoryItems.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
     val totalItems = displayCount + if (showMore) 1 else 0
@@ -1191,7 +1228,12 @@ private fun RecentWatchingRow(
                         .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
                         .focusProperties {
                             if (isFirstContentRow) {
-                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                up =
+                                    if (showTopVersionBadge && topVersionBadgeFocusRequester != null) {
+                                        topVersionBadgeFocusRequester
+                                    } else {
+                                        headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                    }
                             }
                         }
                 )
@@ -1211,7 +1253,12 @@ private fun RecentWatchingRow(
                         .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
                         .focusProperties {
                             if (isFirstContentRow) {
-                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                up =
+                                    if (showTopVersionBadge && topVersionBadgeFocusRequester != null) {
+                                        topVersionBadgeFocusRequester
+                                    } else {
+                                        headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                    }
                             }
                         }
                 )
@@ -1762,7 +1809,9 @@ private fun WebDavMoviesRow(
     currentRowFocusRequesters: List<FocusRequester>?,
     headerFocusRequesters: List<FocusRequester>,
     isFirstContentRow: Boolean,
-    onFocusedColumnChanged: (Int) -> Unit
+    onFocusedColumnChanged: (Int) -> Unit,
+    showTopVersionBadge: Boolean = false,
+    topVersionBadgeFocusRequester: FocusRequester? = null
 ) {
     val displayCount = movies.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
     val totalItems = displayCount + if (showMore) 1 else 0
@@ -1797,7 +1846,12 @@ private fun WebDavMoviesRow(
                         .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
                         .focusProperties {
                             if (isFirstContentRow) {
-                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                up =
+                                    if (showTopVersionBadge && topVersionBadgeFocusRequester != null) {
+                                        topVersionBadgeFocusRequester
+                                    } else {
+                                        headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                    }
                             }
                         }
                 )
@@ -1815,7 +1869,12 @@ private fun WebDavMoviesRow(
                         .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
                         .focusProperties {
                             if (isFirstContentRow) {
-                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                up =
+                                    if (showTopVersionBadge && topVersionBadgeFocusRequester != null) {
+                                        topVersionBadgeFocusRequester
+                                    } else {
+                                        headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                    }
                             }
                         }
                 )
@@ -1836,7 +1895,9 @@ private fun WebDavTvShowsRow(
     currentRowFocusRequesters: List<FocusRequester>?,
     headerFocusRequesters: List<FocusRequester>,
     isFirstContentRow: Boolean,
-    onFocusedColumnChanged: (Int) -> Unit
+    onFocusedColumnChanged: (Int) -> Unit,
+    showTopVersionBadge: Boolean = false,
+    topVersionBadgeFocusRequester: FocusRequester? = null
 ) {
     val displayCount = tvShows.size.coerceAtMost(HOME_SECTION_MAX_ITEMS)
     val totalItems = displayCount + if (showMore) 1 else 0
@@ -1871,7 +1932,12 @@ private fun WebDavTvShowsRow(
                         .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
                         .focusProperties {
                             if (isFirstContentRow) {
-                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                up =
+                                    if (showTopVersionBadge && topVersionBadgeFocusRequester != null) {
+                                        topVersionBadgeFocusRequester
+                                    } else {
+                                        headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                    }
                             }
                         }
                 )
@@ -1889,7 +1955,12 @@ private fun WebDavTvShowsRow(
                         .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(index.coerceAtMost(2)) }
                         .focusProperties {
                             if (isFirstContentRow) {
-                                up = headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                up =
+                                    if (showTopVersionBadge && topVersionBadgeFocusRequester != null) {
+                                        topVersionBadgeFocusRequester
+                                    } else {
+                                        headerFocusRequesters[index.coerceAtMost(headerFocusRequesters.lastIndex)]
+                                    }
                             }
                         }
                 )
@@ -2217,7 +2288,8 @@ private fun TmdbApiRequiredDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val focusRequester = remember { FocusRequester() }
+    val confirmFocusRequester = remember { FocusRequester() }
+    val cancelFocusRequester = remember { FocusRequester() }
     
     Box(
         modifier = Modifier
@@ -2249,7 +2321,8 @@ private fun TmdbApiRequiredDialog(
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
                 .focusProperties {
-                    canFocus = true
+                    // 弹窗卡片本身不抢焦点，仅允许内部按钮获得焦点，避免焦点逃逸到弹窗外
+                    canFocus = false
                 }
         ) {
             Column(
@@ -2288,9 +2361,11 @@ private fun TmdbApiRequiredDialog(
                         ),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
                         modifier = Modifier
+                            .focusRequester(cancelFocusRequester)
                             .onFocusChanged { cancelButtonFocused = it.isFocused }
                             .focusProperties {
                                 left = FocusRequester.Cancel
+                                right = confirmFocusRequester
                                 up = FocusRequester.Cancel
                                 down = FocusRequester.Cancel
                             }
@@ -2315,9 +2390,11 @@ private fun TmdbApiRequiredDialog(
                         ),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
                         modifier = Modifier
-                            .focusRequester(focusRequester)
+                            .focusRequester(confirmFocusRequester)
                             .onFocusChanged { confirmButtonFocused = it.isFocused }
                             .focusProperties {
+                                left = cancelFocusRequester
+                                right = FocusRequester.Cancel
                                 up = FocusRequester.Cancel
                                 down = FocusRequester.Cancel
                             }
@@ -2334,6 +2411,6 @@ private fun TmdbApiRequiredDialog(
     
     // 默认焦点给"去配置"按钮（引导用户配置）
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        confirmFocusRequester.requestFocus()
     }
 }

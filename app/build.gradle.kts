@@ -15,8 +15,8 @@ android {
         applicationId = "com.lomen.tv"
         minSdk = 21
         targetSdk = 34
-        versionCode = 10013
-        versionName = "1.0.13"
+        versionCode = 10015
+        versionName = "1.0.15"
 
         // TV-specific configurations
         vectorDrawables.useSupportLibrary = true

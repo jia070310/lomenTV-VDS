@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -22,10 +23,14 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import com.lomen.tv.domain.model.VersionInfo
 import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.theme.PrimaryYellow
@@ -44,6 +49,11 @@ fun VersionUpdateDialog(
     // 创建焦点请求器
     val cancelFocusRequester = remember { FocusRequester() }
     val updateFocusRequester = remember { FocusRequester() }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+    // 不依赖 toPx() 扩展，避免不同 Compose 版本 API 差异
+    val scrollStepPx = 60.dp.value * density.density
     
     Dialog(
         onDismissRequest = onCancel,
@@ -64,16 +74,29 @@ fun VersionUpdateDialog(
                     .width(DialogDimens.VersionUpdateWidth)
                     .heightIn(min = DialogDimens.VersionUpdateHeightMin, max = DialogDimens.VersionUpdateHeightMax)
                     .onPreviewKeyEvent { keyEvent ->
-                        // 拦截方向键和返回键
-                        if (keyEvent.type == KeyEventType.KeyUp) {
+                        // 统一在弹窗最外层拦截方向键，避免焦点遍历抢先导致“光标跑丢”
+                        if (scrollState.maxValue > 0 && keyEvent.type == KeyEventType.KeyDown) {
+                            val stepPx = scrollStepPx.roundToInt()
                             when (keyEvent.key) {
-                                Key.Back -> {
-                                    onCancel()
-                                    true
+                                Key.DirectionDown -> {
+                                    val target = (scrollState.value + stepPx).coerceIn(0, scrollState.maxValue)
+                                    scope.launch { scrollState.scrollTo(target) }
+                                    return@onPreviewKeyEvent true
                                 }
-                                else -> false
+                                Key.DirectionUp -> {
+                                    val target = (scrollState.value - stepPx).coerceIn(0, scrollState.maxValue)
+                                    scope.launch { scrollState.scrollTo(target) }
+                                    return@onPreviewKeyEvent true
+                                }
                             }
-                        } else false
+                        }
+
+                        if (keyEvent.type == KeyEventType.KeyUp && keyEvent.key == Key.Back) {
+                            onCancel()
+                            return@onPreviewKeyEvent true
+                        }
+
+                        false
                     },
                 colors = CardDefaults.colors(
                     containerColor = Color(0xFF333333)
@@ -94,31 +117,34 @@ fun VersionUpdateDialog(
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                     
-                    // 内容
-                    Column(
+                    // 内容：始终允许滚动（短内容不会产生可滚动位移；长内容即可滚动查看）
+                    Box(
                         modifier = Modifier
                             .weight(1f)
-                            .verticalScroll(rememberScrollState())
+                            .verticalScroll(scrollState)
                     ) {
-                        Text(
-                            text = "更新内容：",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color.White,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                        Text(
-                            text = versionInfo.releaseNotes,
-                            fontSize = 12.sp,
-                            color = Color.White.copy(alpha = 0.8f),
-                            lineHeight = 18.sp
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "发布日期：${versionInfo.releaseDate}",
-                            fontSize = 12.sp,
-                            color = Color.White.copy(alpha = 0.6f)
-                        )
+                        Column {
+                            Text(
+                                text = "更新内容：",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White,
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            )
+                            Text(
+                                text = versionInfo.releaseNotes,
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.8f),
+                                lineHeight = 18.sp,
+                                overflow = TextOverflow.Clip,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "发布日期：${versionInfo.releaseDate}",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        }
                     }
                     
                     // 按钮
