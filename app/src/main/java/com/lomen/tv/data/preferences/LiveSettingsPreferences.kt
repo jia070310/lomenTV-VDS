@@ -57,7 +57,7 @@ class LiveSettingsPreferences @Inject constructor(
         // 内置直播源列表
         val BUILT_IN_LIVE_SOURCES = listOf(
             "LEMONTV" to "https://gh-proxy.org/https://github.com/jia070310/lemonTV/blob/main/iptv-fe.m3u",
-            "MIGU" to "https://gh-proxy.org/github.com/ioptu/IPTV.txt2m3u.player/raw/refs/heads/main/migu.m3u",
+            "MIGU" to "https://gh-proxy.org/https://github.com/ioptu/migu_video/blob/main/migu.m3u",
             "APTV" to "https://gh-proxy.org/https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u"
         )
         

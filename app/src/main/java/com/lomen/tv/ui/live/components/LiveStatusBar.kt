@@ -29,11 +29,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -98,6 +100,7 @@ fun LiveStatusBar(
     onSwitchSource: (String) -> Unit = {},
     onRefreshAllSources: () -> Unit = {},
     onSwitchRoute: (Int) -> Unit = {},  // 线路切换回调
+    focusRecoverySignal: Int = 0,
     onClose: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -206,6 +209,7 @@ fun LiveStatusBar(
                         toastMessageProvider = { toastMessage },
                         onShowToastChange = { showToast = it },
                         onRefreshAllSources = onRefreshAllSources,
+                        focusRecoverySignal = focusRecoverySignal,
                         onUserAction = updateInteractionTime,
                     )
                 }
@@ -494,11 +498,29 @@ private fun LiveStatusBarActions(
     toastMessageProvider: () -> String = { "" },
     onShowToastChange: (Boolean) -> Unit = {},
     onRefreshAllSources: () -> Unit = {},
+    focusRecoverySignal: Int = 0,
     onUserAction: () -> Unit = {},
 ) {
     val channel = channelProvider()
     val currentUrlIdx = currentChannelUrlIdxProvider()
     val hasMultipleRoutes = channel.urlList.size > 1
+    val focusRequesters = remember(hasMultipleRoutes) {
+        List(if (hasMultipleRoutes) 5 else 4) { FocusRequester() }
+    }
+    var selectedButtonIndex by rememberSaveable(hasMultipleRoutes) { mutableIntStateOf(0) }
+
+    // 当按钮数量变化时，钳制索引并恢复到可用按钮
+    LaunchedEffect(hasMultipleRoutes) {
+        if (selectedButtonIndex > focusRequesters.lastIndex) {
+            selectedButtonIndex = focusRequesters.lastIndex
+        }
+        focusRequesters[selectedButtonIndex].requestFocus()
+    }
+
+    // 播放错误等外部状态变化时，强制恢复到当前选中按钮，避免焦点丢失
+    LaunchedEffect(focusRecoverySignal) {
+        focusRequesters.getOrNull(selectedButtonIndex)?.requestFocus()
+    }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -507,6 +529,8 @@ private fun LiveStatusBarActions(
         // 清除缓存按钮
         LiveStatusBarButton(
             title = "清除缓存",
+            focusRequester = focusRequesters[0],
+            onFocused = { selectedButtonIndex = 0 },
             onSelect = {
                 onUserAction()
                 onClearCache()
@@ -518,6 +542,8 @@ private fun LiveStatusBarActions(
         // 切换源按钮
         LiveStatusBarButton(
             title = "切换源",
+            focusRequester = focusRequesters[1],
+            onFocused = { selectedButtonIndex = 1 },
             onSelect = { 
                 onUserAction()
                 onShowSourceDialogChange(true) 
@@ -532,6 +558,8 @@ private fun LiveStatusBarActions(
                 LiveSettingsPreferences.Companion.VideoAspectRatio.FOUR_THREE -> "4:3"
                 LiveSettingsPreferences.Companion.VideoAspectRatio.AUTO -> "自动拉伸"
             },
+            focusRequester = focusRequesters[2],
+            onFocused = { selectedButtonIndex = 2 },
             onSelect = {
                 onUserAction()
                 onChangeVideoAspectRatio()
@@ -541,6 +569,8 @@ private fun LiveStatusBarActions(
         // 刷新全部源按钮
         LiveStatusBarButton(
             title = "刷新全部源",
+            focusRequester = focusRequesters[3],
+            onFocused = { selectedButtonIndex = 3 },
             onSelect = {
                 onUserAction()
                 onRefreshAllSources()
@@ -552,6 +582,8 @@ private fun LiveStatusBarActions(
         if (hasMultipleRoutes) {
             LiveStatusBarButton(
                 title = "线路${currentUrlIdx + 1}/${channel.urlList.size}",
+                focusRequester = focusRequesters[4],
+                onFocused = { selectedButtonIndex = 4 },
                 onSelect = { 
                     onUserAction()
                     // 直接切换到下一线路
@@ -572,9 +604,10 @@ private fun LiveStatusBarActions(
 private fun LiveStatusBarButton(
     modifier: Modifier = Modifier,
     title: String,
+    focusRequester: FocusRequester,
+    onFocused: () -> Unit = {},
     onSelect: () -> Unit = {},
 ) {
-    val focusRequester = remember { FocusRequester() }
     var isFocused by remember { mutableStateOf(false) }
 
     androidx.tv.material3.Button(
@@ -593,6 +626,7 @@ private fun LiveStatusBarButton(
             .focusRequester(focusRequester)
             .onFocusChanged {
                 isFocused = it.isFocused || it.hasFocus
+                if (isFocused) onFocused()
             }
             .handleLiveKeyEvents(
                 onSelect = {

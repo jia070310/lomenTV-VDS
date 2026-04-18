@@ -99,6 +99,7 @@ fun LiveScreen(
 
     // 状态栏显示控制
     var isStatusBarVisible by remember { mutableStateOf(false) }
+    var statusBarFocusRecoverySignal by remember { mutableIntStateOf(0) }
 
     // 直播源列表
     val sourceList by viewModel.sourceList.collectAsState()
@@ -563,6 +564,13 @@ fun LiveScreen(
             focusRequester.requestFocus()
         }
     }
+
+    // 播放错误相关状态变化时，通知状态栏恢复按钮焦点，避免光标被其它状态覆盖
+    LaunchedEffect(retryStatus, errorToastMessage, showErrorDialog, errorDialogMessage) {
+        if (isStatusBarVisible) {
+            statusBarFocusRecoverySignal++
+        }
+    }
     
     // 当临时面板关闭时，重新请求焦点到按键处理层
     LaunchedEffect(isTempPanelVisible) {
@@ -870,6 +878,7 @@ fun LiveScreen(
                     // 刷新全部源逻辑
                     viewModel.refreshAllSources()
                 },
+                focusRecoverySignal = statusBarFocusRecoverySignal,
                 onClose = { isStatusBarVisible = false }
             )
         }
