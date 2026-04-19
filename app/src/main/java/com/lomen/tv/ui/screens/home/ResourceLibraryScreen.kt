@@ -190,6 +190,9 @@ fun ResourceLibraryScreen(
     val compactScale = remember(configuration.screenHeightDp, configuration.screenWidthDp) {
         computeCompactUiScale(configuration.screenHeightDp, configuration.screenWidthDp)
     }
+    // 空列表时右侧主区只有「添加资源库」按钮挂了 addLibraryFocusRequester；listFocusRequester 未附着，对其 requestFocus 会闪退
+    val backButtonRightFocusRequester =
+        if (libraries.isEmpty()) addLibraryFocusRequester else listFocusRequester
     // 资源库主界面整体放大：高分屏更易读，低分屏保持紧凑不溢出
     val resourceLibraryScale = remember(compactScale) {
         if (compactScale >= 1f) 1.12f else (compactScale * 1.08f).coerceAtMost(1f)
@@ -208,8 +211,7 @@ fun ResourceLibraryScreen(
                 onNavigateBack = onNavigateBack,
                 onNavigateToSettings = onNavigateToSettings,
                 backButtonFocusRequester = backButtonFocusRequester,
-                addLibraryFocusRequester = addLibraryFocusRequester,
-                listFocusRequester = listFocusRequester,
+                backButtonRightFocusRequester = backButtonRightFocusRequester,
                 modifier = Modifier.width(280.dp.scale(compactScale))
             )
 
@@ -287,8 +289,7 @@ private fun Sidebar(
     onNavigateBack: () -> Unit,
     onNavigateToSettings: () -> Unit,
     backButtonFocusRequester: FocusRequester,
-    addLibraryFocusRequester: FocusRequester,
-    listFocusRequester: FocusRequester,
+    backButtonRightFocusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
     val s = LocalCompactUiScale.current
@@ -315,7 +316,7 @@ private fun Sidebar(
                     .size(48.dp.scale(s))
                     .focusRequester(backButtonFocusRequester)
                     .focusProperties {
-                        right = listFocusRequester
+                        right = backButtonRightFocusRequester
                     }
                     .onPreviewKeyEvent { e ->
                         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -325,7 +326,11 @@ private fun Sidebar(
                                 true
                             }
                             Key.DirectionRight -> {
-                                listFocusRequester.requestFocus()
+                                try {
+                                    backButtonRightFocusRequester.requestFocus()
+                                } catch (_: IllegalStateException) {
+                                    // 目标尚未进入组合树时忽略
+                                }
                                 true
                             }
                             else -> false
@@ -534,7 +539,11 @@ private fun MainContent(
                 syncState is MediaSyncViewModel.SyncState.Scraping
 
         if (libraries.isEmpty()) {
-            EmptyLibraryViewV2(onAddLibrary = onAddLibrary)
+            EmptyLibraryViewV2(
+                onAddLibrary = onAddLibrary,
+                addButtonFocusRequester = addLibraryFocusRequester,
+                backButtonFocusRequester = backButtonFocusRequester,
+            )
         } else {
             val webDavLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.WEBDAV }
             val quarkLibraries = libraries.filter { it.type == ResourceLibrary.LibraryType.QUARK }
@@ -1333,7 +1342,9 @@ private fun EmptyWebDavLibraryView(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun EmptyLibraryViewV2(
-    onAddLibrary: () -> Unit
+    onAddLibrary: () -> Unit,
+    addButtonFocusRequester: FocusRequester,
+    backButtonFocusRequester: FocusRequester,
 ) {
     val s = LocalCompactUiScale.current
     Column(
@@ -1396,7 +1407,10 @@ private fun EmptyLibraryViewV2(
                         focusedContentColor = BackgroundDark    // 选中：黑色字
                     ),
                     shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp.scale(s))),
-                    modifier = Modifier.onFocusChanged { isButtonFocused = it.isFocused }
+                    modifier = Modifier
+                        .focusRequester(addButtonFocusRequester)
+                        .focusProperties { left = backButtonFocusRequester }
+                        .onFocusChanged { isButtonFocused = it.isFocused }
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
