@@ -109,6 +109,15 @@ import com.lomen.tv.ui.components.VersionUpdateBadge
 
 private const val HOME_SECTION_MAX_ITEMS = 10
 
+private fun com.lomen.tv.data.local.database.entity.WebDavMediaEntity.activityAt(): Long =
+    maxOf(createdAt, updatedAt)
+
+private fun com.lomen.tv.ui.viewmodel.TvShowSeries.activityAt(): Long {
+    val latestCreated = episodes.maxOfOrNull { it.createdAt } ?: 0L
+    val latestUpdated = episodes.maxOfOrNull { it.updatedAt } ?: 0L
+    return maxOf(latestCreated, latestUpdated)
+}
+
 private fun FocusRequester.tryRequestFocus(): Boolean {
     return runCatching {
         requestFocus()
@@ -182,48 +191,14 @@ fun HomeScreen(
     val currentLibrary by resourceLibraryViewModel.currentLibraryId.collectAsState()
     val mediaSortOrder by resourceLibraryViewModel.mediaSortOrder.collectAsState()
 
-    // 首页按“最新新增优先，其次最新更新”排序（适配当前横向列表视觉方向）
-    val movies = moviesRaw.sortedWith(
-        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
-            it.createdAt
-        }.thenBy { it.updatedAt }
-    )
-    val variety = varietyRaw.sortedWith(
-        compareBy<com.lomen.tv.ui.viewmodel.TvShowSeries> { series ->
-            series.episodes.maxOfOrNull { it.createdAt } ?: 0L
-        }.thenBy { series ->
-            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
-        }
-    )
-    val concerts = concertsRaw.sortedWith(
-        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
-            it.createdAt
-        }.thenBy { it.updatedAt }
-    )
-    val documentaries = documentariesRaw.sortedWith(
-        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
-            it.createdAt
-        }.thenBy { it.updatedAt }
-    )
-    val others = othersRaw.sortedWith(
-        compareBy<com.lomen.tv.data.local.database.entity.WebDavMediaEntity> {
-            it.createdAt
-        }.thenBy { it.updatedAt }
-    )
-    val tvShows = tvShowsRaw.sortedWith(
-        compareBy<com.lomen.tv.ui.viewmodel.TvShowSeries> { series ->
-            series.episodes.maxOfOrNull { it.createdAt } ?: 0L
-        }.thenBy { series ->
-            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
-        }
-    )
-    val anime = animeRaw.sortedWith(
-        compareBy<com.lomen.tv.ui.viewmodel.TvShowSeries> { series ->
-            series.episodes.maxOfOrNull { it.createdAt } ?: 0L
-        }.thenBy { series ->
-            series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
-        }
-    )
+    // 首页按“最近活动优先”排序：最近更新与新加入都排在前面
+    val movies = moviesRaw.sortedByDescending { it.activityAt() }
+    val variety = varietyRaw.sortedByDescending { it.activityAt() }
+    val concerts = concertsRaw.sortedByDescending { it.activityAt() }
+    val documentaries = documentariesRaw.sortedByDescending { it.activityAt() }
+    val others = othersRaw.sortedByDescending { it.activityAt() }
+    val tvShows = tvShowsRaw.sortedByDescending { it.activityAt() }
+    val anime = animeRaw.sortedByDescending { it.activityAt() }
     val rowSpecs = remember(
         recentWatchHistory,
         mediaSortOrder,

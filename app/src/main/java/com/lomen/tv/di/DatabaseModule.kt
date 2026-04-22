@@ -6,6 +6,9 @@ import com.lomen.tv.data.local.database.LomenDatabase
 import com.lomen.tv.data.local.database.dao.EpisodeDao
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.SkipConfigDao
+import com.lomen.tv.data.local.database.dao.TmdbEpisodeDao
+import com.lomen.tv.data.local.database.dao.TmdbMediaDao
+import com.lomen.tv.data.local.database.dao.TmdbSyncQueueDao
 import com.lomen.tv.data.local.database.dao.WatchHistoryDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import dagger.Module
@@ -54,5 +57,20 @@ object DatabaseModule {
     @Provides
     fun provideSkipConfigDao(database: LomenDatabase): SkipConfigDao {
         return database.skipConfigDao()
+    }
+
+    @Provides
+    fun provideTmdbMediaDao(database: LomenDatabase): TmdbMediaDao {
+        return database.tmdbMediaDao()
+    }
+
+    @Provides
+    fun provideTmdbEpisodeDao(database: LomenDatabase): TmdbEpisodeDao {
+        return database.tmdbEpisodeDao()
+    }
+
+    @Provides
+    fun provideTmdbSyncQueueDao(database: LomenDatabase): TmdbSyncQueueDao {
+        return database.tmdbSyncQueueDao()
     }
 }

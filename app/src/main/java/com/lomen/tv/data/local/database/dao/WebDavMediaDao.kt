@@ -25,6 +25,9 @@ interface WebDavMediaDao {
     @Query("SELECT * FROM webdav_media WHERE filePath = :filePath LIMIT 1")
     suspend fun getByFilePath(filePath: String): WebDavMediaEntity?
 
+    @Query("SELECT filePath, createdAt FROM webdav_media WHERE filePath IN (:filePaths)")
+    suspend fun getCreatedAtByFilePaths(filePaths: List<String>): List<FileCreatedAt>
+
     @Query("SELECT * FROM webdav_media WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): WebDavMediaEntity?
 
@@ -63,5 +66,10 @@ interface WebDavMediaDao {
     data class FileFingerprint(
         val filePath: String,
         val fileFingerprint: String?
+    )
+
+    data class FileCreatedAt(
+        val filePath: String,
+        val createdAt: Long
     )
 }

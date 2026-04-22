@@ -4,17 +4,20 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.lomen.tv.data.scraper.FolderSeriesNameParser
+import com.lomen.tv.data.local.database.dao.TmdbMediaDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
 import com.lomen.tv.data.repository.ResourceLibraryRepository
 import com.lomen.tv.domain.model.ResourceLibrary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 // 剧集系列数据类（合并同一部剧的集数）
@@ -32,6 +35,7 @@ data class TvShowSeries(
 @HiltViewModel
 class ResourceLibraryViewModel @Inject constructor(
     private val webDavMediaDao: WebDavMediaDao,
+    private val tmdbMediaDao: TmdbMediaDao,
     private val repository: ResourceLibraryRepository,
     private val mediaTypeSortPreferences: com.lomen.tv.data.preferences.MediaTypeSortPreferences,
     private val watchHistoryService: com.lomen.tv.domain.service.WatchHistoryService
@@ -107,12 +111,35 @@ class ResourceLibraryViewModel @Inject constructor(
                     launch {
                         Log.d(TAG, "Loading media for library: $libraryId")
                         webDavMediaDao.getByLibraryId(libraryId).collect { media ->
-                            Log.d(TAG, "Loaded ${media.size} media items from database")
-                            _currentLibraryMedia.value = media
+                            val tmdbIds = media.mapNotNull { it.tmdbId?.toIntOrNull() }.distinct()
+                            val tmdbMap = if (tmdbIds.isNotEmpty()) {
+                                withContext(Dispatchers.IO) {
+                                    tmdbMediaDao.getByTmdbIds(tmdbIds)
+                                }.associateBy { it.tmdbId.toString() }
+                            } else {
+                                emptyMap()
+                            }
+
+                            val mergedMedia = media.map { item ->
+                                val tmdb = item.tmdbId?.let { tmdbMap[it] }
+                                if (tmdb != null) {
+                                    item.copy(
+                                        posterUrl = tmdb.posterUrl ?: item.posterUrl,
+                                        backdropUrl = tmdb.backdropUrl ?: item.backdropUrl,
+                                        overview = tmdb.overview ?: item.overview,
+                                        rating = tmdb.rating ?: item.rating
+                                    )
+                                } else {
+                                    item
+                                }
+                            }
+
+                            Log.d(TAG, "Loaded ${mergedMedia.size} media items from database")
+                            _currentLibraryMedia.value = mergedMedia
                             
                             // 不做去重，直接使用原始媒体数据进行分类
                             // 剧集应该保留所有集数，不能去重
-                            val categorized = media.map { mediaItem ->
+                            val categorized = mergedMedia.map { mediaItem ->
                                 val titleLower = mediaItem.title.lowercase()
                                 val genresLower = (mediaItem.genres ?: "").lowercase()
                                 val isAnimeByKeyword =
@@ -275,24 +302,43 @@ class ResourceLibraryViewModel @Inject constructor(
 
     // 将剧集按系列分组（按标题分组）
     private fun groupTvShowsBySeries(tvShows: List<WebDavMediaEntity>): List<TvShowSeries> {
-        // 按标题分组
-        val grouped = tvShows.groupBy { it.title }
+        // 按“归一化标题”分组，避免 "卧底娇娃" 与 "卧底娇娃 ()" 被拆成两张卡片
+        val grouped = tvShows.groupBy { entity ->
+            canonicalSeriesTitle(entity.title)
+        }
         
         return grouped.map { (title, episodes) ->
-            // 使用第一集的信息作为系列信息
-            val firstEpisode = episodes.first()
+            // 封面优先使用组内任一有图条目，避免“第一集无图导致整组无封面”
+            val withPoster = episodes.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: episodes.first()
+            val bestRated = episodes.maxWithOrNull(
+                compareBy<WebDavMediaEntity> { it.rating ?: 0f }.thenByDescending { it.updatedAt }
+            ) ?: episodes.first()
             TvShowSeries(
                 id = title,  // 使用标题作为ID
                 title = title,
-                posterUrl = firstEpisode.posterUrl,
-                year = firstEpisode.year,
-                rating = firstEpisode.rating,
-                overview = firstEpisode.overview,
+                posterUrl = withPoster.posterUrl,
+                year = withPoster.year ?: bestRated.year,
+                rating = bestRated.rating,
+                overview = bestRated.overview ?: withPoster.overview,
                 episodes = episodes.sortedBy { it.episodeNumber },  // 按集数排序
                 // 采用“已更新到第X集”的口径：优先最大集号，缺失时回退数量
                 episodeCount = episodes.mapNotNull { it.episodeNumber }.maxOrNull() ?: episodes.size
             )
         }.sortedByDescending { it.episodeCount }  // 按集数排序，集数多的在前
+    }
+
+    private fun canonicalSeriesTitle(rawTitle: String): String {
+        val strippedSeason = FolderSeriesNameParser.stripAllSeasonMarkers(rawTitle.trim())
+        return strippedSeason
+            // 清理空括号：(), （）, [] 等，避免产生“同名+空括号”重复卡片
+            // 注意：[] {} 的右括号在正则里需要转义，否则会触发 PatternSyntaxException
+            .replace(Regex("""\(\s*\)|（\s*）|\[\s*\]|\{\s*\}"""), "")
+            // 统一多余空白
+            .replace(Regex("""\s+"""), " ")
+            // 去除结尾常见分隔符
+            .trim()
+            .trimEnd('.', '-', '_', '·')
+            .ifBlank { rawTitle.trim() }
     }
 
     /**

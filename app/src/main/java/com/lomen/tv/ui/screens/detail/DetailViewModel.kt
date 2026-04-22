@@ -7,14 +7,20 @@ import com.lomen.tv.data.local.database.dao.EpisodeDao
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.dao.WatchHistoryDao
+import com.lomen.tv.data.local.database.dao.TmdbEpisodeDao
+import com.lomen.tv.data.local.database.dao.TmdbMediaDao
 import com.lomen.tv.data.local.database.entity.WatchHistoryEntity
 import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
+import com.lomen.tv.data.local.database.entity.TmdbEpisodeEntity
+import com.lomen.tv.data.scraper.ScrapeResult
 import com.lomen.tv.data.scraper.DoubanScraper
 import com.lomen.tv.data.scraper.FolderSeriesNameParser
 import com.lomen.tv.data.scraper.TmdbScraper
+import com.lomen.tv.domain.service.TmdbMetadataSyncManager
 import com.lomen.tv.domain.model.MediaType
 import com.lomen.tv.domain.model.isLocalEpisodicSeries
 import com.lomen.tv.domain.service.MetadataService
+import com.lomen.tv.domain.service.WatchHistoryService
 import com.lomen.tv.utils.FileNameParser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.TimeoutCancellationException
@@ -32,8 +38,12 @@ class DetailViewModel @Inject constructor(
     private val movieDao: MovieDao,
     private val episodeDao: EpisodeDao,
     private val webDavMediaDao: WebDavMediaDao,
+    private val tmdbMediaDao: TmdbMediaDao,
+    private val tmdbEpisodeDao: TmdbEpisodeDao,
     private val watchHistoryDao: WatchHistoryDao,
-    private val metadataService: MetadataService
+    private val metadataService: MetadataService,
+    private val tmdbMetadataSyncManager: TmdbMetadataSyncManager,
+    private val watchHistoryService: WatchHistoryService
 ) : ViewModel() {
 
     private val tmdbScraper = TmdbScraper.getInstance()
@@ -79,6 +89,10 @@ class DetailViewModel @Inject constructor(
     
     // 当前媒体 ID
     private var currentMediaId: String? = null
+    private var currentMediaType: MediaType = MediaType.MOVIE
+
+    private val _manualEditState = MutableStateFlow(ManualMetadataEditState())
+    val manualEditState: StateFlow<ManualMetadataEditState> = _manualEditState
     
     /**
      * 切换选中的季数
@@ -119,50 +133,11 @@ class DetailViewModel @Inject constructor(
                 if (webDavMedia != null) {
                     // 记录真实媒体ID（避免把标题等非ID写入观看历史）
                     currentMediaId = webDavMedia.id
-                    // 获取TMDB总集数（如果有tmdbId） - 使用协程异步获取
-                    var totalEpisodes: Int? = null
-                    val tmdbIdStr = webDavMedia.tmdbId
+                    currentMediaType = webDavMedia.type
                     val isWebDavEpisodic = webDavMedia.type == MediaType.TV_SHOW ||
                         webDavMedia.type == MediaType.VARIETY ||
                         webDavMedia.type == MediaType.ANIME ||
                         webDavMedia.type == MediaType.DOCUMENTARY
-                    if (isWebDavEpisodic && tmdbIdStr != null) {
-                        totalEpisodes = withContext(Dispatchers.IO) {
-                            try {
-                                val tmdbIdInt = tmdbIdStr.toIntOrNull()
-                                if (tmdbIdInt != null) {
-                                    Log.d(TAG, "\u5f00\u59cb\u83b7\u53d6TMDB\u603b\u96c6\u6570: tmdbId=$tmdbIdInt")
-                                    // \u4f7f\u7528\u65e7\u7248API\u83b7\u53d6TV\u8be6\u60c5
-                                    val url = java.net.URL("https://api.tmdb.org/3/tv/$tmdbIdInt?api_key=cd1660fdecd8066874f593beab890967&language=zh-CN")
-                                    val connection = url.openConnection() as java.net.HttpURLConnection
-                                    connection.requestMethod = "GET"
-                                    connection.setRequestProperty("Accept", "application/json")
-                                    connection.connectTimeout = 10000  // \u589e\u52a0\u523010\u79d2
-                                    connection.readTimeout = 10000
-                                                    
-                                    val responseCode = connection.responseCode
-                                    Log.d(TAG, "TMDB\u603b\u96c6\u6570\u8bf7\u6c42\u54cd\u5e94: HTTP $responseCode")
-                                    if (responseCode in 200..299) {
-                                        val responseText = connection.inputStream.bufferedReader().use { it.readText() }
-                                        connection.disconnect()
-                                        Log.d(TAG, "TMDB\u54cd\u5e94\u524d100\u5b57\u7b26: ${responseText.take(100)}")
-                                        val jsonObj = org.json.JSONObject(responseText)
-                                        val episodes = jsonObj.optInt("number_of_episodes", 0).takeIf { it > 0 }
-                                        Log.d(TAG, "TMDB\u603b\u96c6\u6570: $episodes")
-                                        episodes
-                                    } else {
-                                        Log.w(TAG, "TMDB\u603b\u96c6\u6570\u8bf7\u6c42\u5931\u8d25: HTTP $responseCode")
-                                        null
-                                    }
-                                } else {
-                                    null
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "\u83b7\u53d6TMDB\u603b\u96c6\u6570\u5931\u8d25: ${e.message}", e)
-                                null
-                            }
-                        }
-                    }
                     
                     // 转换为UI模型（综艺详情标题与首页卡片一致，不直接用 TMDB 里可能错误的「第八季」）
                     val displayTitle = varietyDisplayTitleForDetail(webDavMedia)
@@ -178,7 +153,7 @@ class DetailViewModel @Inject constructor(
                         genres = webDavMedia.genres?.split(",")?.map { it.trim() } ?: emptyList(),
                         type = webDavMedia.type,
                         seasonCount = webDavMedia.seasonNumber ?: 1, // 使用从文件名中提取的真实季数
-                        totalEpisodes = totalEpisodes,  // 添加总集数
+                        totalEpisodes = null,  // 总集数后续后台加载，避免进入详情页阻塞
                         path = webDavMedia.filePath
                     )
 
@@ -194,43 +169,29 @@ class DetailViewModel @Inject constructor(
                             it.libraryId == webDavMedia.libraryId && it.type == webDavMedia.type
                         }
                         Log.d(TAG, "找到同系列剧集: ${seriesEpisodes.size} 个")
-                        
-                        // 获取TMDB剧集详情（如果有tmdbId）
-                        val tmdbEpisodesMap = mutableMapOf<Pair<Int, Int>, com.lomen.tv.data.scraper.EpisodeInfo>()
-                        val tmdbId = webDavMedia.tmdbId
-                        if (tmdbId != null) {
-                            // 获取所有涉及的季的剧集信息
-                            val involvedSeasons = seriesEpisodes.mapNotNull { it.seasonNumber }.distinct()
-                            for (season in involvedSeasons) {
-                                try {
-                                    val tmdbEpisodes = tmdbScraper.getTvSeasonEpisodes(tmdbId, season)
-                                    tmdbEpisodes?.forEach { ep ->
-                                        tmdbEpisodesMap[Pair(season, ep.episodeNumber)] = ep
-                                    }
-                                } catch (e: Exception) {
-                                    // 静默失败，不影响加载速度
-                                }
-                            }
-                        }
-                        
-                        // 将所有剧集转换为EpisodeItem，并使用TMDB信息丰富
+
+                        // 先用本地信息快速构建剧集列表，保证详情页秒开；TMDB 单集信息后台渐进补全
                         val allEpisodes = seriesEpisodes.map { episode ->
                             val parsed = episode.fileName?.let { FileNameParser.parse(it) }
                             val parsedEp = parsed?.episode
                             // 库内集号常误为 1：综艺/本地命名优先采用文件名解析的集号
                             val episodeNumber = parsedEp ?: episode.episodeNumber ?: 1
                             val seasonNumber = episode.seasonNumber ?: 1
-                            val tmdbEpisode = tmdbEpisodesMap[Pair(seasonNumber, episodeNumber)]
                             
-                            // 优先使用TMDB的副标题，否则用文件名
-                            val episodeTitle = tmdbEpisode?.name?.takeIf { it.isNotBlank() }
-                                ?: episode.fileName.substringBeforeLast('.')
+                            val parsedTitle = parsed?.title?.trim().orEmpty()
+                            val fileNameTitle = episode.fileName.substringBeforeLast('.').trim()
+                            val episodeTitle = resolveEpisodeDisplayTitle(
+                                parsedTitle = parsedTitle,
+                                fileNameTitle = fileNameTitle,
+                                seriesTitle = webDavMedia.title,
+                                episodeNumber = episodeNumber
+                            )
                             
-                            // 优先使用TMDB的剧照，否则用主封面
-                            val stillUrl = tmdbEpisode?.stillUrl ?: episode.posterUrl ?: webDavMedia.posterUrl
+                            // 占位图优先使用当前剧目主海报（手动修正后可立刻生效），
+                            // 后续再由 TMDB 单集剧照覆盖。
+                            val stillUrl = webDavMedia.posterUrl ?: webDavMedia.backdropUrl ?: episode.posterUrl
                             
-                            // 时长（分钟转毫秒）
-                            val duration = (tmdbEpisode?.runtime ?: 0) * 60 * 1000L
+                            val duration = 0L
                             
                             EpisodeItem(
                                 id = episode.id,
@@ -257,12 +218,15 @@ class DetailViewModel @Inject constructor(
                         initialSeason = webDavMedia.seasonNumber ?: seasons.firstOrNull() ?: 1
                         _selectedSeason.value = initialSeason
                         
+                        // 先给所有分季剧集填充观看历史，再按季筛选，保证详情页/切季都能拿到正确进度
+                        val episodesWithHistoryBySeason = allEpisodesBySeason.mapValues { (_, eps) ->
+                            enrichEpisodesWithWatchHistory(eps, webDavMedia.id)
+                        }
+                        allEpisodesBySeason = episodesWithHistoryBySeason
+
                         // 筛选当前季的剧集
-                        episodes = allEpisodesBySeason[initialSeason] ?: emptyList()
+                        episodes = episodesWithHistoryBySeason[initialSeason] ?: emptyList()
                         Log.d(TAG, "当前季 $initialSeason 的剧集数量：${episodes.size}")
-                                                                
-                        // 加载观看历史，更新剧集进度信息
-                        updateEpisodesWithWatchHistory(episodes, webDavMedia.id)
                     } else {
                         episodes = emptyList()
                         seasons = emptyList()
@@ -275,6 +239,55 @@ class DetailViewModel @Inject constructor(
                         episodes = episodes,
                         cast = emptyList()
                     )
+
+                    // 后台加载：总集数、单集标题/剧照/时长（尽量不阻塞 UI；失败则保留本地占位信息）
+                    if (isWebDavEpisodic && !webDavMedia.tmdbId.isNullOrBlank()) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val tmdbIdInt = webDavMedia.tmdbId?.toIntOrNull() ?: return@launch
+
+                            // 1) 先读本地 tmdb_media；没有则 enqueue（后台慢慢补全封面/简介/总集数）
+                            val cached = tmdbMediaDao.getByTmdbId(tmdbIdInt)
+                            if (cached == null) {
+                                tmdbMetadataSyncManager.enqueueMedia(tmdbIdInt, priority = 1)
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    val currentState = _uiState.value
+                                    if (currentState is DetailUiState.Success) {
+                                        _uiState.value = currentState.copy(
+                                            media = currentState.media.copy(
+                                                overview = cached.overview ?: currentState.media.overview,
+                                                posterUrl = cached.posterUrl ?: currentState.media.posterUrl,
+                                                backdropUrl = cached.backdropUrl ?: currentState.media.backdropUrl,
+                                                totalEpisodes = cached.episodeCount ?: currentState.media.totalEpisodes
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+
+                            // 2) 当前季：优先读本地 tmdb_episode；没有则 enqueue（后台补全单集标题/剧照/时长）
+                            val currentSeason = selectedSeason.value
+                            val cachedEpisodes = tmdbEpisodeDao.getBySeason(tmdbIdInt, currentSeason)
+                            if (cachedEpisodes.isEmpty()) {
+                                tmdbMetadataSyncManager.enqueueSeasonEpisodes(tmdbIdInt, currentSeason, priority = 1)
+                            } else {
+                                val enriched = (allEpisodesBySeason[currentSeason] ?: emptyList()).map { ep ->
+                                    val cachedEp = cachedEpisodes.firstOrNull { it.episodeNumber == ep.episodeNumber }
+                                    if (cachedEp == null) ep else ep.copy(
+                                        title = cachedEp.name ?: ep.title,
+                                        stillUrl = cachedEp.stillUrl ?: ep.stillUrl,
+                                        duration = (cachedEp.runtimeMinutes?.times(60_000L))?.takeIf { it > 0 } ?: ep.duration
+                                    )
+                                }
+                                withContext(Dispatchers.Main) {
+                                    val currentState = _uiState.value
+                                    if (currentState is DetailUiState.Success) {
+                                        _uiState.value = currentState.copy(episodes = enriched)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     
                     // 后台异步加载演职人员（使用TMDB API，增加超时和重试）
                     viewModelScope.launch {
@@ -423,30 +436,12 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 根据观看历史更新剧集进度信息
-     */
-    private suspend fun updateEpisodesWithWatchHistory(episodes: List<EpisodeItem>, mediaId: String) {
-        // 对于电视剧，需要获取同系列的所有剧集的观看历史
-        val currentState = _uiState.value
-        if (currentState !is DetailUiState.Success) return
-        
-        val media = currentState.media
-        val episodic = media.type == MediaType.TV_SHOW ||
-            media.type == MediaType.VARIETY ||
-            media.type == MediaType.ANIME ||
-            media.type == MediaType.DOCUMENTARY
-        if (!episodic) return
-        
-        // 获取同系列的所有剧集 ID
-        val allEpisodeIds = mutableListOf<String>()
-        for ((_, episodeList) in allEpisodesBySeason) {
-            allEpisodeIds.addAll(episodeList.map { it.id })
-        }
-        
-        // 获取这些剧集的观看历史
-        val updatedEpisodes = episodes.map { episode ->
-            val history = watchHistoryDao.getWatchHistory(mediaId, episode.id)
+    private suspend fun enrichEpisodesWithWatchHistory(
+        episodes: List<EpisodeItem>,
+        mediaId: String
+    ): List<EpisodeItem> {
+        return episodes.map { episode ->
+            val history = resolveEpisodeWatchHistory(mediaId, episode.id)
             if (history != null) {
                 episode.copy(
                     progress = history.progress,
@@ -457,11 +452,6 @@ class DetailViewModel @Inject constructor(
                 episode
             }
         }
-        
-        // 更新 UI 状态中的剧集列表
-        _uiState.value = (currentState as DetailUiState.Success).copy(
-            episodes = updatedEpisodes
-        )
     }
     
     /**
@@ -519,7 +509,7 @@ class DetailViewModel @Inject constructor(
             var targetEpisode: EpisodeItem? = null
             
             for (episode in allEpisodes) {
-                val history = watchHistoryDao.getWatchHistory(mediaId, episode.id)
+                val history = resolveEpisodeWatchHistory(mediaId, episode.id)
                 if (history != null) {
                     if (latestHistory == null || history.lastWatchedAt > latestHistory.lastWatchedAt) {
                         latestHistory = history
@@ -569,7 +559,7 @@ class DetailViewModel @Inject constructor(
             ?: return null
         
         // 获取观看历史
-        val history = watchHistoryDao.getWatchHistory(mediaId, episodeId)
+        val history = resolveEpisodeWatchHistory(mediaId, episodeId)
         
         return EpisodePlaybackInfo(
             videoUrl = episode.path ?: "",
@@ -579,6 +569,18 @@ class DetailViewModel @Inject constructor(
             episodeId = episodeId,
             startPosition = history?.progress ?: 0
         )
+    }
+
+    /**
+     * 兼容多种历史键格式：
+     * 1) 新格式：movieId=系列ID, episodeId=单集ID
+     * 2) 旧格式：movieId=单集ID, episodeId=null
+     * 3) 过渡格式：按 episodeId 直接检索
+     */
+    private suspend fun resolveEpisodeWatchHistory(mediaId: String, episodeId: String): WatchHistoryEntity? {
+        return watchHistoryDao.getWatchHistory(mediaId, episodeId)
+            ?: watchHistoryDao.getLatestWatchHistoryByEpisodeId(episodeId)
+            ?: watchHistoryDao.getLatestWatchHistoryByMovieId(episodeId)
     }
 
     fun refreshMetadata(mediaId: String) {
@@ -613,6 +615,251 @@ class DetailViewModel @Inject constructor(
             }
         }
     }
+
+    fun prepareManualEdit(initialTitle: String, initialYear: String?) {
+        _manualEditState.value = ManualMetadataEditState(
+            query = buildString {
+                append(initialTitle.trim())
+                initialYear?.trim()?.takeIf { it.length == 4 }?.let {
+                    append(" ")
+                    append(it)
+                }
+            },
+            candidates = emptyList(),
+            isSearching = false,
+            isApplying = false,
+            errorMessage = null,
+            lastAppliedTmdbId = null,
+            successMessage = null
+        )
+    }
+
+    fun updateManualQuery(query: String) {
+        _manualEditState.value = _manualEditState.value.copy(query = query)
+    }
+
+    fun searchManualCandidates() {
+        val query = _manualEditState.value.query.trim()
+        if (query.isBlank()) {
+            _manualEditState.value = _manualEditState.value.copy(errorMessage = "请输入要搜索的标题")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _manualEditState.value = _manualEditState.value.copy(
+                isSearching = true,
+                errorMessage = null,
+                candidates = emptyList()
+            )
+            try {
+                val year = Regex("""(19|20)\d{2}""").find(query)?.value?.toIntOrNull()
+                val pureQuery = query.replace(Regex("""(19|20)\d{2}"""), "").trim().ifBlank { query }
+                val episodic = currentMediaType == MediaType.TV_SHOW ||
+                    currentMediaType == MediaType.VARIETY ||
+                    currentMediaType == MediaType.ANIME ||
+                    currentMediaType == MediaType.DOCUMENTARY
+
+                val results = if (episodic) {
+                    tmdbScraper.searchTvCandidates(pureQuery, year, limit = 12)
+                } else {
+                    tmdbScraper.searchMovieCandidates(pureQuery, year, limit = 12)
+                }
+
+                val candidates = results.mapNotNull { it.toCandidateOrNull() }
+                _manualEditState.value = _manualEditState.value.copy(
+                    isSearching = false,
+                    candidates = candidates,
+                    errorMessage = if (candidates.isEmpty()) "没有找到匹配结果，请换个关键词" else null
+                )
+            } catch (e: Exception) {
+                _manualEditState.value = _manualEditState.value.copy(
+                    isSearching = false,
+                    errorMessage = e.message ?: "搜索失败"
+                )
+            }
+        }
+    }
+
+    fun applyManualCandidate(candidate: ManualTmdbCandidate) {
+        val mediaId = currentMediaId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _manualEditState.value = _manualEditState.value.copy(isApplying = true, errorMessage = null)
+            try {
+                val current = webDavMediaDao.getById(mediaId) ?: return@launch
+                val now = System.currentTimeMillis()
+                val updated = current.copy(
+                    tmdbId = candidate.tmdbId.toString(),
+                    title = candidate.title.ifBlank { current.title },
+                    originalTitle = candidate.originalTitle ?: current.originalTitle,
+                    overview = candidate.overview ?: current.overview,
+                    posterUrl = candidate.posterUrl ?: current.posterUrl,
+                    backdropUrl = candidate.backdropUrl ?: current.backdropUrl,
+                    year = candidate.year ?: current.year,
+                    rating = candidate.rating ?: current.rating,
+                    genres = candidate.genres.takeIf { it.isNotEmpty() }?.joinToString(",") ?: current.genres,
+                    source = "tmdb",
+                    scrapedAt = now,
+                    updatedAt = now
+                )
+                webDavMediaDao.update(updated)
+
+                // 同剧分集批量覆盖：手动修正后，确保所有分集条目的封面/简介/TMDB 关联一起更新，
+                // 避免「最近播放」这类按 episodeId 取数的入口仍显示旧封面。
+                val relatedIds = (allEpisodesBySeason.values.flatten().map { it.id } + mediaId).distinct()
+                relatedIds.forEach { id ->
+                    if (id == mediaId) return@forEach
+                    val item = webDavMediaDao.getById(id) ?: return@forEach
+                    if (item.libraryId != updated.libraryId || item.type != updated.type) return@forEach
+                    webDavMediaDao.update(
+                        item.copy(
+                            tmdbId = candidate.tmdbId.toString(),
+                            overview = candidate.overview ?: item.overview,
+                            posterUrl = candidate.posterUrl ?: item.posterUrl,
+                            backdropUrl = candidate.backdropUrl ?: item.backdropUrl,
+                            year = candidate.year ?: item.year,
+                            rating = candidate.rating ?: item.rating,
+                            genres = candidate.genres.takeIf { it.isNotEmpty() }?.joinToString(",") ?: item.genres,
+                            source = "tmdb",
+                            scrapedAt = now,
+                            updatedAt = now
+                        )
+                    )
+                }
+
+                tmdbMetadataSyncManager.enqueueMedia(candidate.tmdbId, priority = 1)
+                if (updated.type != MediaType.MOVIE) {
+                    // 手动修正后，立即拉取并落库单集信息，覆盖旧本地缓存，详情页可立刻显示正确封面/副标题
+                    preloadEpisodeCacheForManualSelection(candidate.tmdbId)
+                }
+
+                _manualEditState.value = _manualEditState.value.copy(
+                    isApplying = false,
+                    lastAppliedTmdbId = candidate.tmdbId,
+                    errorMessage = null,
+                    successMessage = "已修正为：${candidate.title}${candidate.year?.let { " (${it})" } ?: ""}"
+                )
+                // 让首页最近播放立即重新组装，避免命中 5 分钟旧缓存
+                watchHistoryService.clearCache()
+                loadMediaDetail(mediaId)
+            } catch (e: Exception) {
+                _manualEditState.value = _manualEditState.value.copy(
+                    isApplying = false,
+                    errorMessage = e.message ?: "应用失败"
+                )
+            }
+        }
+    }
+
+    fun clearManualEditAppliedFlag() {
+        _manualEditState.value = _manualEditState.value.copy(lastAppliedTmdbId = null)
+    }
+
+    fun clearManualEditSuccessMessage() {
+        _manualEditState.value = _manualEditState.value.copy(successMessage = null)
+    }
+
+    private fun resolveEpisodeDisplayTitle(
+        parsedTitle: String,
+        fileNameTitle: String,
+        seriesTitle: String,
+        episodeNumber: Int
+    ): String {
+        val normalizedSeries = seriesTitle.trim()
+        val parsed = parsedTitle.trim()
+        val genericEpRegex = Regex("""^第\s*\d+\s*集$""")
+
+        if (parsed.isNotBlank() &&
+            !genericEpRegex.matches(parsed) &&
+            !parsed.equals(normalizedSeries, ignoreCase = true)
+        ) {
+            return parsed
+        }
+
+        // 从文件名里剥离剧名/年份/季集标记，尽量得到真实单集标题
+        var cleaned = fileNameTitle
+            .replace(normalizedSeries, "", ignoreCase = true)
+            .replace(Regex("""\b(19|20)\d{2}\b"""), "")
+            .replace(Regex("""\b[Ss]\d+[Ee]\d+\b"""), "")
+            .replace(Regex("""第\s*\d+\s*集"""), "")
+            .replace(Regex("""[._-]+"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+        if (cleaned.isBlank()) {
+            cleaned = "第${episodeNumber}集"
+        }
+        return cleaned
+    }
+
+    private suspend fun preloadEpisodeCacheForManualSelection(tmdbId: Int) {
+        val seasons = _availableSeasons.value
+            .ifEmpty { listOf(_selectedSeason.value.coerceAtLeast(1)) }
+            .distinct()
+            .sorted()
+
+        for (season in seasons) {
+            val seasonEpisodes = runCatching {
+                tmdbScraper.getTvSeasonEpisodes(tmdbId.toString(), season).orEmpty()
+            }.getOrElse { emptyList() }
+
+            if (seasonEpisodes.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                val entities = seasonEpisodes.map { ep ->
+                    TmdbEpisodeEntity(
+                        tmdbId = tmdbId,
+                        seasonNumber = season,
+                        episodeNumber = ep.episodeNumber,
+                        name = ep.name.takeIf { it.isNotBlank() },
+                        overview = ep.overview?.takeIf { it.isNotBlank() },
+                        stillUrl = ep.stillUrl,
+                        airDate = ep.airDate,
+                        runtimeMinutes = ep.runtime.takeIf { it > 0 },
+                        updatedAt = now
+                    )
+                }
+                tmdbEpisodeDao.upsertAll(entities)
+            } else {
+                tmdbMetadataSyncManager.enqueueSeasonEpisodes(tmdbId, season, priority = 1)
+            }
+        }
+    }
+}
+
+data class ManualMetadataEditState(
+    val query: String = "",
+    val isSearching: Boolean = false,
+    val isApplying: Boolean = false,
+    val candidates: List<ManualTmdbCandidate> = emptyList(),
+    val errorMessage: String? = null,
+    val lastAppliedTmdbId: Int? = null,
+    val successMessage: String? = null
+)
+
+data class ManualTmdbCandidate(
+    val tmdbId: Int,
+    val title: String,
+    val originalTitle: String?,
+    val year: Int?,
+    val rating: Float?,
+    val overview: String?,
+    val posterUrl: String?,
+    val backdropUrl: String?,
+    val genres: List<String>
+)
+
+private fun ScrapeResult.toCandidateOrNull(): ManualTmdbCandidate? {
+    val parsedTmdbId = id.toIntOrNull() ?: return null
+    return ManualTmdbCandidate(
+        tmdbId = parsedTmdbId,
+        title = title,
+        originalTitle = originalTitle,
+        year = year,
+        rating = rating,
+        overview = overview,
+        posterUrl = posterUrl,
+        backdropUrl = backdropUrl,
+        genres = genres
+    )
 }
 
 // 数据类：用于立即播放按钮的播放信息

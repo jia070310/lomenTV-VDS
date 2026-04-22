@@ -63,6 +63,7 @@ class PlayerViewModel @Inject constructor(
 
     private var currentMediaId: String? = null
     private var currentEpisodeId: String? = null
+    @Volatile private var forceStartFromBeginning: Boolean = false
 
     fun initializePlayer() {
         playerService.initializePlayer()
@@ -217,6 +218,8 @@ class PlayerViewModel @Inject constructor(
      * 准备媒体播放 - 支持真实URL解析和WebDAV认证
      */
     fun prepareMedia(videoPath: String, title: String?, episodeTitle: String?, startPosition: Long = 0L) {
+        // 每次新开媒体先重置；若用户选择“从头开始”会在播放中重新置位
+        forceStartFromBeginning = false
         viewModelScope.launch {
             try {
                 _isLoadingMedia.value = true
@@ -270,6 +273,15 @@ class PlayerViewModel @Inject constructor(
                             
                             val state = playerService.playerState.value
                             if (state.type == com.lomen.tv.domain.service.PlayerState.Type.READY && state.duration > 0) {
+                                if (forceStartFromBeginning) {
+                                    android.util.Log.d("PlayerViewModel", "Force restart enabled, play from beginning")
+                                    playerService.pause()
+                                    playerService.seekTo(0L)
+                                    delay(120)
+                                    playerService.play()
+                                    forceStartFromBeginning = false
+                                    break
+                                }
                                 // 播放器已准备好，先暂停，然后跳转到正确位置
                                 playerService.pause()
                                 val currentPos = playerService.getCurrentPosition()
@@ -298,7 +310,12 @@ class PlayerViewModel @Inject constructor(
                             val player = playerService.getPlayer()
                             if (player != null) {
                                 // 即使超时，也尝试跳转并播放
-                                playerService.seekTo(startPosition)
+                                if (forceStartFromBeginning) {
+                                    playerService.seekTo(0L)
+                                    forceStartFromBeginning = false
+                                } else {
+                                    playerService.seekTo(startPosition)
+                                }
                                 delay(200)
                                 playerService.play()
                             } else {
@@ -386,6 +403,12 @@ class PlayerViewModel @Inject constructor(
 
     fun seekTo(position: Long) {
         playerService.seekTo(position)
+    }
+
+    fun restartFromBeginning() {
+        forceStartFromBeginning = true
+        playerService.seekTo(0L)
+        playerService.play()
     }
 
     fun seekForward(deltaMs: Long = 10000) {

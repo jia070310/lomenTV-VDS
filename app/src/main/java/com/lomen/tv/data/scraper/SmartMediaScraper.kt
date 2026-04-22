@@ -6,8 +6,15 @@ import com.lomen.tv.domain.model.MediaType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 智能批量刮削器
@@ -19,7 +26,9 @@ import java.util.concurrent.ConcurrentHashMap
 class SmartMediaScraper {
     companion object {
         private const val TAG = "SmartMediaScraper"
-        private const val CONCURRENT_LIMIT = 15 // 增加并发限制到15，提高刮削速度
+        // 慢网/TV 端环境下 TMDB 请求可能 >12s，过短会导致大量“回退本地信息”，进而没有封面/简介/单集信息
+        private const val CONCURRENT_LIMIT = 10
+        private const val SINGLE_SERIES_TIMEOUT_MS = 35_000L
     }
 
     /**
@@ -66,7 +75,8 @@ class SmartMediaScraper {
     suspend fun scrapeBatchOptimized(
         files: List<WebDavFile>,
         onProgress: (Int, Int) -> Unit,
-        client: com.lomen.tv.data.webdav.WebDavClient? = null
+        client: com.lomen.tv.data.webdav.WebDavClient? = null,
+        onItemsReady: suspend (List<ScrapedMedia>) -> Unit = {}
     ): List<ScrapedMedia> = withContext(Dispatchers.IO) {
         val total = files.size
         Log.d(TAG, "开始智能批量刮削，共 $total 个文件")
@@ -75,40 +85,60 @@ class SmartMediaScraper {
         val clusters = clusterBySeries(files)
         Log.d(TAG, "聚类完成，共 ${clusters.size} 部剧/电影")
 
-        // 第二步：并发刮削每部剧的主信息（限制并发数）
-        var processedCount = 0
+        // 第二步：流式并发刮削每部剧的主信息（限制并发数 + 单条超时）
+        val processedCount = AtomicInteger(0)
         val seriesResults = mutableMapOf<String, ScrapedMedia?>()
+        val seriesResultsLock = Mutex()
+        val fileResults = mutableMapOf<String, ScrapedMedia>()
+        val fileResultsLock = Mutex()
+        val semaphore = Semaphore(CONCURRENT_LIMIT)
 
-        clusters.entries.chunked(CONCURRENT_LIMIT).forEach { batch ->
-            val batchResults = batch.map { (seriesKey, clusterFiles) ->
+        coroutineScope {
+            clusters.entries.map { (seriesKey, clusterFiles) ->
                 async {
-                    // 检查缓存
-                    val cached = cache[seriesKey]
-                    if (cached != null && System.currentTimeMillis() - cached.timestamp < 30 * 60 * 1000) {
-                        Log.d(TAG, "使用缓存: $seriesKey")
-                        seriesKey to cached.result
-                    } else {
-                        // 刮削该剧的主信息，传入 client 以支持 nfo 文件读取
-                        val result = scrapeSeriesInfo(clusterFiles.first(), client)
-                        cache[seriesKey] = ScrapeCacheEntry(result)
-                        seriesKey to result
+                    semaphore.withPermit {
+                        val result = try {
+                            // 检查缓存
+                            val cached = cache[seriesKey]
+                            if (cached != null && System.currentTimeMillis() - cached.timestamp < 30 * 60 * 1000) {
+                                Log.d(TAG, "使用缓存: $seriesKey")
+                                cached.result
+                            } else {
+                                val scraped = withTimeoutOrNull(SINGLE_SERIES_TIMEOUT_MS) {
+                                    scrapeSeriesInfo(clusterFiles.first(), client)
+                                }
+                                if (scraped == null) {
+                                    Log.w(TAG, "刮削超时/失败，回退本地信息: $seriesKey")
+                                }
+                                cache[seriesKey] = ScrapeCacheEntry(scraped)
+                                scraped
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "刮削异常，回退本地信息: $seriesKey", e)
+                            null
+                        }
+
+                        seriesResultsLock.withLock {
+                            seriesResults[seriesKey] = result
+                        }
+                        val partialReady = clusterFiles.mapNotNull { file ->
+                            createScrapedMedia(file, result)
+                        }
+                        if (partialReady.isNotEmpty()) {
+                            fileResultsLock.withLock {
+                                partialReady.forEach { fileResults[it.filePath] = it }
+                            }
+                            onItemsReady(partialReady)
+                        }
+                        val current = processedCount.addAndGet(clusterFiles.size).coerceAtMost(total)
+                        onProgress(current, total)
                     }
                 }
             }.awaitAll()
-
-            batchResults.forEach { (key, result) ->
-                seriesResults[key] = result
-                processedCount += clusters[key]?.size ?: 0
-                onProgress(processedCount.coerceAtMost(total), total)
-            }
         }
 
-        // 第三步：为每个文件生成完整结果
-        val finalResults = files.mapNotNull { file ->
-            val seriesKey = getSeriesKey(file)
-            val seriesInfo = seriesResults[seriesKey]
-            createScrapedMedia(file, seriesInfo)
-        }
+        // 第三步：按输入顺序汇总完整结果
+        val finalResults = files.mapNotNull { file -> fileResults[file.path] }
 
         Log.d(TAG, "智能批量刮削完成: ${finalResults.size} / $total")
         finalResults
@@ -612,37 +642,38 @@ class SmartMediaScraper {
         try {
             val fileNameWithoutExt = file.name.substringBeforeLast(".", file.name)
             val parentPath = file.path.substringBeforeLast("/", "")
-            
-            // 可能的 nfo 文件路径（按优先级排序）
-            val possibleNfoPaths = listOf(
-                "$parentPath/$fileNameWithoutExt.nfo",           // 1. 同名 .nfo
-                "$parentPath/movie.nfo",                          // 2. movie.nfo
-                "$parentPath/tvshow.nfo",                         // 3. tvshow.nfo
-                "$parentPath/${fileNameWithoutExt}.NFO",          // 4. 同名 .NFO (大写)
-                "$parentPath/MOVIE.NFO",                          // 5. MOVIE.NFO (大写)
-                "$parentPath/TVSHOW.NFO"                          // 6. TVSHOW.NFO (大写)
+
+            // 只请求一次目录列表，避免每个候选 .nfo 都走一遍 HEAD 导致高延迟卡顿
+            val dirFiles = client.listFiles(parentPath).getOrNull().orEmpty()
+            if (dirFiles.isEmpty()) return null
+            val nfoByLowerName = dirFiles
+                .asSequence()
+                .filter { !it.isDirectory && it.name.endsWith(".nfo", ignoreCase = true) }
+                .associateBy { it.name.lowercase() }
+            if (nfoByLowerName.isEmpty()) return null
+
+            // 候选文件按优先级匹配
+            val candidateNames = listOf(
+                "$fileNameWithoutExt.nfo",
+                "movie.nfo",
+                "tvshow.nfo"
             )
-            
-            // 遍历可能的 nfo 文件路径
-            for (nfoPath in possibleNfoPaths) {
+
+            for (candidate in candidateNames) {
+                val matched = nfoByLowerName[candidate.lowercase()] ?: continue
+                val nfoPath = matched.path
                 try {
-                    // 检查文件是否存在
-                    val exists = client.fileExists(nfoPath)
-                    if (exists) {
-                        Log.d(TAG, "找到 .nfo 文件: $nfoPath")
-                        // 读取文件内容
-                        val content = client.readTextFile(nfoPath)
-                        if (!content.isNullOrBlank()) {
-                            val result = parseNfoContent(content, file)
-                            if (result != null) {
-                                Log.d(TAG, "成功解析 .nfo 文件: ${result.title}")
-                                return result
-                            }
+                    Log.d(TAG, "找到 .nfo 文件: $nfoPath")
+                    val content = client.readTextFile(nfoPath)
+                    if (!content.isNullOrBlank()) {
+                        val result = parseNfoContent(content, file)
+                        if (result != null) {
+                            Log.d(TAG, "成功解析 .nfo 文件: ${result.title}")
+                            return result
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "检查 .nfo 文件失败: $nfoPath", e)
-                    continue
+                    Log.w(TAG, "读取 .nfo 文件失败: $nfoPath", e)
                 }
             }
             

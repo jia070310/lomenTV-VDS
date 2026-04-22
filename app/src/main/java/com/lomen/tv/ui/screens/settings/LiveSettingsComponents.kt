@@ -79,8 +79,8 @@ import com.lomen.tv.ui.scale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.tv.foundation.lazy.list.TvLazyColumn
-import androidx.tv.foundation.lazy.list.TvLazyListState
 import androidx.tv.foundation.lazy.list.items
+import androidx.tv.foundation.lazy.list.rememberTvLazyListState
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
@@ -128,7 +128,8 @@ fun QrCodeImage(
             modifier = Modifier
                 .fillMaxSize()
                 .align(Alignment.Center)
-                .padding(8.dp),
+                // 缩小二维码白底上下留白，为下方地址文本腾出空间
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             painter = rememberQrCodePainter(
                 data = text,
                 shapes = QrShapes(
@@ -240,7 +241,7 @@ fun QrCodeDialog(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         // 说明文字
                         description?.let {
@@ -253,17 +254,17 @@ fun QrCodeDialog(
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
 
                         // 二维码 - 使用百分比尺寸以适应不同分辨率，缩小高度
                         QrCodeImage(
                             text = text,
                             modifier = Modifier
-                                .fillMaxWidth(0.55f)
+                                .fillMaxWidth(0.53f)
                                 .heightIn(max = DialogDimens.QrImageMaxHeight)
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         // 服务器地址
                         Column(
@@ -279,11 +280,12 @@ fun QrCodeDialog(
                                 text = text,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = PrimaryYellow,
-                                textAlign = TextAlign.Center
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         // 提示信息
                         Text(
@@ -527,12 +529,15 @@ fun <T> HistoryListDialog(
             },
             text = {
                 var hasFocused by remember { mutableStateOf(false) }
-                val currentIndex = items.indexOf(currentItem).coerceAtLeast(0)
+                val currentIndex = remember(items, currentItem) {
+                    items.indexOf(currentItem).coerceAtLeast(0)
+                }
+                val listState = rememberTvLazyListState(
+                    initialFirstVisibleItemIndex = max(0, currentIndex - 2)
+                )
 
                 TvLazyColumn(
-                    state = TvLazyListState(
-                        max(0, currentIndex - 2),
-                    ),
+                    state = listState,
                     contentPadding = PaddingValues(vertical = 2.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -543,8 +548,8 @@ fun <T> HistoryListDialog(
                         val isBuiltIn = isBuiltInItem(item)
                         val (headline, supporting) = itemContent(item, isSelected, isFocused)
 
-                        LaunchedEffect(Unit) {
-                            if (item == currentItem && !hasFocused) {
+                        if (item == currentItem && !hasFocused) {
+                            LaunchedEffect(item, currentItem) {
                                 hasFocused = true
                                 focusRequester.requestFocus()
                             }

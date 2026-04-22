@@ -20,6 +20,9 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history WHERE movieId = :movieId AND (episodeId = :episodeId OR (:episodeId IS NULL AND episodeId IS NULL))")
     suspend fun getWatchHistory(movieId: String, episodeId: String?): WatchHistoryEntity?
 
+    @Query("SELECT * FROM watch_history WHERE episodeId = :episodeId ORDER BY lastWatchedAt DESC LIMIT 1")
+    suspend fun getLatestWatchHistoryByEpisodeId(episodeId: String): WatchHistoryEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWatchHistory(history: WatchHistoryEntity)
 

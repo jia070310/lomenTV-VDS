@@ -441,11 +441,48 @@ object MediaInfoExtractor {
         episodeInfo: Pair<Int, Int>?
     ): MediaType {
         return when (MediaClassificationStrategyHolder.strategy) {
+            MediaClassificationStrategy.SMART_BALANCED ->
+                determineMediaTypeSmartBalanced(title, filename, parentFolder, episodeInfo)
             MediaClassificationStrategy.KEYWORD_FIRST ->
                 determineMediaTypeKeywordFirst(title, filename, parentFolder, episodeInfo)
             MediaClassificationStrategy.STRUCTURE_FIRST ->
                 determineMediaTypeStructureFirst(title, filename, parentFolder, episodeInfo)
         }
+    }
+
+    /**
+     * 智能均衡：综合结构和关键词，减少极端场景误判。
+     * 规则：
+     * 1) 强关键词优先（演唱会/动漫/纪录片）
+     * 2) 季集结构存在时，默认归剧集；若同时命中综艺关键词或日期分期，则归综艺
+     * 3) 无季集结构时，按强关键词归类，其余归电影
+     */
+    private fun determineMediaTypeSmartBalanced(
+        title: String,
+        filename: String,
+        parentFolder: String,
+        episodeInfo: Pair<Int, Int>?
+    ): MediaType {
+        val combinedText = "$title $filename $parentFolder".lowercase()
+        val hasEpisodeInfo = episodeInfo != null
+        val hasDateEpisodePattern = DATE_EPISODE_REGEX.containsMatchIn(filename)
+
+        val isConcert = CONCERT_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isAnime = ANIME_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isDocumentary = DOCUMENTARY_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+        val isVariety = VARIETY_KEYWORDS.any { combinedText.contains(it.lowercase()) }
+
+        if (isConcert) return MediaType.CONCERT
+        if (isAnime) return MediaType.ANIME
+        if (isDocumentary) return MediaType.DOCUMENTARY
+
+        if (hasEpisodeInfo) {
+            if (isVariety || hasDateEpisodePattern) return MediaType.VARIETY
+            return MediaType.TV_SHOW
+        }
+
+        if (isVariety && hasDateEpisodePattern) return MediaType.VARIETY
+        return MediaType.MOVIE
     }
 
     /**

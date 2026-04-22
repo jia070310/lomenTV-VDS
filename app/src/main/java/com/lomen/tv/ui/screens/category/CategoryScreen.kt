@@ -58,6 +58,15 @@ import com.lomen.tv.ui.viewmodel.ResourceLibraryViewModel
 
 private const val CATEGORY_COLUMNS = 6
 
+private fun com.lomen.tv.data.local.database.entity.WebDavMediaEntity.activityAt(): Long =
+    maxOf(createdAt, updatedAt)
+
+private fun com.lomen.tv.ui.viewmodel.TvShowSeries.activityAt(): Long {
+    val latestCreated = episodes.maxOfOrNull { it.createdAt } ?: 0L
+    val latestUpdated = episodes.maxOfOrNull { it.updatedAt } ?: 0L
+    return maxOf(latestCreated, latestUpdated)
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun CategoryScreen(
@@ -68,7 +77,7 @@ fun CategoryScreen(
 ) {
     val focusRequester = remember { FocusRequester() }
     
-    // 根据媒体类型获取对应的数据，并按最新添加排序
+    // 根据媒体类型获取对应的数据，并按“最近活动优先”排序（新加入/最近更新）
     val tvShowsRaw by resourceLibraryViewModel.tvShows.collectAsState()
     val animeRaw by resourceLibraryViewModel.anime.collectAsState()
     val moviesRaw by resourceLibraryViewModel.movies.collectAsState()
@@ -77,19 +86,13 @@ fun CategoryScreen(
     val documentariesRaw by resourceLibraryViewModel.documentaries.collectAsState()
     val othersRaw by resourceLibraryViewModel.others.collectAsState()
     
-    val tvShows = tvShowsRaw.sortedByDescending { series ->
-        series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
-    }
-    val anime = animeRaw.sortedByDescending { series ->
-        series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
-    }
-    val movies = moviesRaw.sortedByDescending { it.updatedAt }
-    val variety = varietyRaw.sortedByDescending { series ->
-        series.episodes.maxOfOrNull { it.updatedAt } ?: 0L
-    }
-    val concerts = concertsRaw.sortedByDescending { it.updatedAt }
-    val documentaries = documentariesRaw.sortedByDescending { it.updatedAt }
-    val others = othersRaw.sortedByDescending { it.updatedAt }
+    val tvShows = tvShowsRaw.sortedByDescending { it.activityAt() }
+    val anime = animeRaw.sortedByDescending { it.activityAt() }
+    val movies = moviesRaw.sortedByDescending { it.activityAt() }
+    val variety = varietyRaw.sortedByDescending { it.activityAt() }
+    val concerts = concertsRaw.sortedByDescending { it.activityAt() }
+    val documentaries = documentariesRaw.sortedByDescending { it.activityAt() }
+    val others = othersRaw.sortedByDescending { it.activityAt() }
     
     // 获取标题和颜色
     val (title, accentColor, itemsCount) = when (mediaType) {

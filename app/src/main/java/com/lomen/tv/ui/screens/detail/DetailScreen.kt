@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -20,14 +21,19 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.tv.foundation.lazy.list.TvLazyColumn
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
@@ -49,9 +55,21 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.tv.material3.Border
 import androidx.tv.material3.Button
@@ -69,6 +87,7 @@ import androidx.tv.material3.TabRowDefaults
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.lomen.tv.domain.model.MediaType
+import com.lomen.tv.ui.components.InfoPillToast
 import com.lomen.tv.ui.theme.BackgroundDark
 import com.lomen.tv.ui.theme.GlassBackground
 import com.lomen.tv.ui.theme.PrimaryYellow
@@ -99,9 +118,23 @@ fun DetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     val selectedSeason by viewModel.selectedSeason.collectAsState()
     val availableSeasons by viewModel.availableSeasons.collectAsState()
+    val manualEditState by viewModel.manualEditState.collectAsState()
+    var showManualDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(mediaId) {
         viewModel.loadMediaDetail(mediaId)
+    }
+    LaunchedEffect(manualEditState.lastAppliedTmdbId) {
+        if (manualEditState.lastAppliedTmdbId != null) {
+            showManualDialog = false
+            viewModel.clearManualEditAppliedFlag()
+        }
+    }
+    LaunchedEffect(manualEditState.successMessage) {
+        if (manualEditState.successMessage != null) {
+            delay(2200)
+            viewModel.clearManualEditSuccessMessage()
+        }
     }
 
     Box(
@@ -142,11 +175,28 @@ fun DetailScreen(
                     selectedSeason = selectedSeason,
                     availableSeasons = availableSeasons,
                     onSeasonSelected = { viewModel.selectSeason(it) },
+                    onManualEditClick = {
+                        showManualDialog = true
+                        viewModel.prepareManualEdit(state.media.title, state.media.year)
+                    },
                     onNavigateBack = onNavigateBack,
                     onPlayClick = onPlayClick,
                     viewModel = viewModel
                 )
             }
+        }
+
+        if (showManualDialog) {
+            ManualMetadataEditDialog(
+                state = manualEditState,
+                onDismiss = { showManualDialog = false },
+                onQueryChange = viewModel::updateManualQuery,
+                onSearch = viewModel::searchManualCandidates,
+                onApply = viewModel::applyManualCandidate
+            )
+        }
+        manualEditState.successMessage?.let { msg ->
+            InfoPillToast(message = msg)
         }
     }
 }
@@ -160,6 +210,7 @@ private fun DetailContent(
     selectedSeason: Int,
     availableSeasons: List<Int>,
     onSeasonSelected: (Int) -> Unit,
+    onManualEditClick: () -> Unit,
     onNavigateBack: () -> Unit,
     onPlayClick: (videoUrl: String, title: String, episodeTitle: String?, mediaId: String, episodeId: String?, startPosition: Long) -> Unit,
     viewModel: DetailViewModel
@@ -185,6 +236,7 @@ private fun DetailContent(
                 availableSeasons = availableSeasons,
                 currentTabFocusRequester = activeTabFocusRequester,
                 onSeasonSelected = onSeasonSelected,
+                onManualEditClick = onManualEditClick,
                 onNavigateBack = onNavigateBack,
                 onPlayClick = {
                     // 立即播放按钮：根据观看历史决定播放位置
@@ -257,14 +309,10 @@ private fun DetailContent(
                                         val videoUrl = playbackInfo.videoUrl
                                         // 确保集数信息正确显示
                                         val episodeTitleText = episode.title?.trim() ?: ""
-                                        val displayEpisodeTitle = if (episode.episodeNumber != null) {
-                                            if (episodeTitleText == media.title || episodeTitleText.isEmpty()) {
-                                                "第${episode.episodeNumber}集"
-                                            } else {
-                                                "第${episode.episodeNumber}集 $episodeTitleText"
-                                            }
+                                        val displayEpisodeTitle = if (episodeTitleText == media.title || episodeTitleText.isEmpty()) {
+                                            "第${episode.episodeNumber}集"
                                         } else {
-                                            episodeTitleText
+                                            "第${episode.episodeNumber}集 $episodeTitleText"
                                         }
                                         android.util.Log.d("DetailScreen", "Playing episode: title=$displayEpisodeTitle, media.title=${media.title}, episode.title=${episode.title}, startPosition=${playbackInfo.startPosition}")
                                         onPlayClick(
@@ -337,6 +385,7 @@ private fun HeroSection(
     availableSeasons: List<Int>,
     currentTabFocusRequester: FocusRequester,
     onSeasonSelected: (Int) -> Unit,
+    onManualEditClick: () -> Unit,
     onNavigateBack: () -> Unit,
     onPlayClick: () -> Unit
 ) {
@@ -398,7 +447,7 @@ private fun HeroSection(
             )
         ) {
             Icon(
-                imageVector = Icons.Default.ArrowBack,
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "Back",
                 modifier = Modifier.size(28.dp)
             )
@@ -601,6 +650,241 @@ private fun HeroSection(
                             )
                         }
                     }
+                    Button(
+                        onClick = onManualEditClick,
+                        colors = ButtonDefaults.colors(
+                            containerColor = SurfaceDark.copy(alpha = 0.8f),
+                            contentColor = TextPrimary,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = Color.Black,
+                            pressedContainerColor = PrimaryYellow,
+                            pressedContentColor = Color.Black
+                        ),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(24.dp)),
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "手动修正",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                color = Color.Unspecified
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun ManualMetadataEditDialog(
+    state: ManualMetadataEditState,
+    onDismiss: () -> Unit,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onApply: (ManualTmdbCandidate) -> Unit
+) {
+    val queryFocusRequester = remember { FocusRequester() }
+    val searchBtnFocusRequester = remember { FocusRequester() }
+    var queryFieldValue by remember { mutableStateOf(TextFieldValue(state.query)) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // 仅在外部文本真的变化时同步，避免用户编辑时光标被重置到开头
+    LaunchedEffect(state.query) {
+        if (state.query != queryFieldValue.text) {
+            queryFieldValue = TextFieldValue(
+                text = state.query,
+                selection = TextRange(state.query.length)
+            )
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(80)
+        searchBtnFocusRequester.requestFocus()
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                onClick = {},
+                colors = CardDefaults.colors(containerColor = SurfaceDark),
+                modifier = Modifier
+                    .fillMaxWidth(0.375f)
+                    .fillMaxHeight(0.8f)
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                            onDismiss()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    .focusProperties {
+                        // 锁定焦点在弹窗内部，避免跳到背景页面
+                        exit = { FocusRequester.Cancel }
+                    }
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("手动修正刮削", style = MaterialTheme.typography.headlineSmall, color = TextPrimary)
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(BackgroundDark.copy(alpha = 0.6f))
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            BasicTextField(
+                                value = queryFieldValue,
+                                onValueChange = { newValue ->
+                                    queryFieldValue = newValue
+                                    onQueryChange(newValue.text)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(queryFocusRequester)
+                                    .onFocusChanged {
+                                        if (it.isFocused) {
+                                            queryFieldValue = queryFieldValue.copy(
+                                                selection = TextRange(queryFieldValue.text.length)
+                                            )
+                                            keyboardController?.show()
+                                        }
+                                    }
+                                    .focusProperties {
+                                        right = searchBtnFocusRequester
+                                    }
+                                    .onPreviewKeyEvent { keyEvent ->
+                                        if (
+                                            keyEvent.type == KeyEventType.KeyUp &&
+                                            keyEvent.key == Key.DirectionRight &&
+                                            queryFieldValue.selection.end >= queryFieldValue.text.length
+                                        ) {
+                                            searchBtnFocusRequester.requestFocus()
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    },
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = TextPrimary),
+                                cursorBrush = SolidColor(PrimaryYellow),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                decorationBox = { inner ->
+                                    if (queryFieldValue.text.isBlank()) {
+                                        Text("输入剧名+年份，例如 八千里路云和月 2026", color = TextMuted)
+                                    }
+                                    inner()
+                                }
+                            )
+                        }
+                        Button(
+                            onClick = onSearch,
+                            colors = ButtonDefaults.colors(
+                                containerColor = SurfaceDark.copy(alpha = 0.8f),
+                                contentColor = TextPrimary,
+                                focusedContainerColor = PrimaryYellow,
+                                focusedContentColor = Color.Black,
+                                pressedContainerColor = PrimaryYellow,
+                                pressedContentColor = Color.Black
+                            ),
+                            modifier = Modifier
+                                .focusRequester(searchBtnFocusRequester)
+                                .focusProperties {
+                                    left = queryFocusRequester
+                                }
+                        ) {
+                            Text(
+                                text = if (state.isSearching) "搜索中..." else "搜索",
+                                style = MaterialTheme.typography.bodyLarge.copy(color = Color.Unspecified)
+                            )
+                        }
+                    }
+                    state.errorMessage?.let {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(text = it, color = Color(0xFFFF6B6B), style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(state.candidates) { item ->
+                            var isFocused by remember { mutableStateOf(false) }
+                            Card(
+                                onClick = { onApply(item) },
+                                colors = CardDefaults.colors(
+                                    containerColor = BackgroundDark.copy(alpha = 0.5f),
+                                    focusedContainerColor = PrimaryYellow,
+                                    pressedContainerColor = PrimaryYellow
+                                ),
+                                scale = CardDefaults.scale(
+                                    scale = 1.0f,
+                                    focusedScale = 1.02f,
+                                    pressedScale = 1.0f
+                                ),
+                                modifier = Modifier.onFocusChanged { isFocused = it.isFocused }
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Text(
+                                        text = "${item.title} (${item.year ?: "--"})  TMDB:${item.tmdbId}",
+                                        color = if (isFocused) Color.Black else TextPrimary,
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    item.originalTitle?.takeIf { it.isNotBlank() && it != item.title }?.let {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = it,
+                                            color = if (isFocused) Color.Black.copy(alpha = 0.82f) else TextMuted,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = item.overview ?: "暂无简介",
+                                        color = if (isFocused) Color.Black.copy(alpha = 0.82f) else TextSecondary,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = if (state.isApplying) "正在应用..." else "点击应用此结果",
+                                        color = if (isFocused) Color.Black else PrimaryYellow,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -723,6 +1007,43 @@ private fun EpisodeCard(
                         .background(Color.Black.copy(alpha = 0.2f))
                 )
 
+                // 播放进度条（有观看记录才显示）
+                val progressRatio = remember(episode.progress, episode.duration) {
+                    if (episode.duration > 0) {
+                        (episode.progress.toFloat() / episode.duration.toFloat()).coerceIn(0f, 1f)
+                    } else 0f
+                }
+                if (progressRatio > 0.01f) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 8.dp, top = 8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "已看 ${formatWatchedTime(episode.progress)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextPrimary
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .background(Color.White.copy(alpha = 0.25f))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressRatio)
+                                .fillMaxHeight()
+                                .background(PrimaryYellow)
+                        )
+                    }
+                }
+
                 // Duration
                 Box(
                     modifier = Modifier
@@ -767,9 +1088,9 @@ private fun EpisodeCard(
             }
         }
 
-        // Episode Title (副标题)
+        // 单集信息：第一行显示集数，第二行显示标题
         Text(
-            text = "第${episode.episodeNumber}集 ${episode.title ?: ""}",
+            text = "第${episode.episodeNumber}集",
             style = MaterialTheme.typography.bodyMedium,
             color = TextPrimary,
             maxLines = 1,
@@ -778,23 +1099,25 @@ private fun EpisodeCard(
                 .padding(top = 8.dp)
                 .width(300.dp)
         )
-
-        // Episode Path (显示文件名)
-        episode.path?.let {
-            val fileName = it.substringAfterLast("/")
-            Text(
-                text = fileName,
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                modifier = Modifier
-                    .padding(top = 4.dp)
-                    .width(300.dp)
-            )
-        }
+        Text(
+            text = episode.title ?: "",
+            style = MaterialTheme.typography.labelMedium,
+            color = TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .width(300.dp)
+        )
     }
+}
+
+private fun formatWatchedTime(ms: Long): String {
+    if (ms <= 0L) return "00:00"
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format("%d:%02d", minutes, seconds)
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class)

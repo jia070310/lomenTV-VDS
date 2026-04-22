@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -66,12 +67,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import androidx.tv.material3.Card
+import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Icon
 import androidx.tv.material3.IconButton
@@ -132,6 +136,15 @@ fun PlayerScreen(
     val playerState by viewModel.playerState.collectAsState()
     val episodeMessage by viewModel.episodeNavigationMessage.collectAsState()
     var showControls by remember { mutableStateOf(true) }
+
+    // 续播提示：有起播位置时弹窗 3 秒（播放继续进行）
+    var showResumePrompt by remember(startPosition) { mutableStateOf(startPosition > 0L) }
+    LaunchedEffect(showResumePrompt) {
+        if (showResumePrompt) {
+            delay(8000)
+            showResumePrompt = false
+        }
+    }
     
     // 当前播放的标题（可在切换剧集时更新）
     var currentTitle by remember { mutableStateOf(title) }
@@ -603,6 +616,18 @@ fun PlayerScreen(
             )
         }
 
+        // 续播提示弹窗：继续/从头（不影响后台播放）
+        if (showResumePrompt && startPosition > 0L) {
+            ResumeOrRestartPromptDialog(
+                startPositionMs = startPosition,
+                onContinue = { showResumePrompt = false },
+                onRestart = {
+                    showResumePrompt = false
+                    viewModel.restartFromBeginning()
+                }
+            )
+        }
+
         // 选集窗口（参照截图：右上固定面板）
         if (showEpisodeListDialog && episodeList.isNotEmpty()) {
             EpisodeListPanel(
@@ -746,6 +771,164 @@ fun PlayerScreen(
                     viewModel.prepareMedia(videoUrl, title, episodeTitle, startPosition)
                 }
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun ResumeOrRestartPromptDialog(
+    startPositionMs: Long,
+    onContinue: () -> Unit,
+    onRestart: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = { /* 由3秒自动关闭或用户按钮操作关闭 */ },
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            ResumeOrRestartPromptContent(
+                startPositionMs = startPositionMs,
+                onContinue = onContinue,
+                onRestart = onRestart,
+                onClose = onContinue
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun ResumeOrRestartPromptContent(
+    startPositionMs: Long,
+    onContinue: () -> Unit,
+    onRestart: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val continueFocus = remember { FocusRequester() }
+    val restartFocus = remember { FocusRequester() }
+    val closeFocus = remember { FocusRequester() }
+    var continueFocused by remember { mutableStateOf(false) }
+    var restartFocused by remember { mutableStateOf(false) }
+    var closeFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(120)
+        continueFocus.requestFocus()
+    }
+
+    Card(
+        onClick = {}, // 仅用于承载样式；焦点由内部按钮接管
+        colors = CardDefaults.colors(containerColor = SurfaceDark.copy(alpha = 0.92f)),
+        modifier = modifier
+            .width(520.dp)
+            .onPreviewKeyEvent { keyEvent ->
+                // 锁定焦点在窗口内（方向键不外溢）
+                if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (keyEvent.key) {
+                    Key.DirectionUp,
+                    Key.DirectionDown -> true
+                    else -> false
+                }
+            }
+            .focusProperties {
+                // 卡片本身不抢焦点，避免“焦点跑不见”
+                canFocus = false
+                exit = { FocusRequester.Cancel }
+            }
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
+            Text(
+                text = "检测到播放记录：${formatDuration(startPositionMs)}",
+                style = MaterialTheme.typography.bodyLarge,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = onContinue,
+                    colors = ButtonDefaults.colors(
+                        containerColor = SurfaceDark,
+                        focusedContainerColor = PrimaryYellow,
+                        contentColor = TextPrimary,
+                        focusedContentColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .focusRequester(continueFocus)
+                        .focusProperties {
+                            left = FocusRequester.Cancel
+                            right = restartFocus
+                            up = FocusRequester.Cancel
+                            down = FocusRequester.Cancel
+                        }
+                        .onFocusChanged { continueFocused = it.isFocused }
+                ) {
+                    Text(
+                        text = "继续播放",
+                        color = if (continueFocused) Color.Black else TextPrimary
+                    )
+                }
+                Button(
+                    onClick = onRestart,
+                    colors = ButtonDefaults.colors(
+                        containerColor = SurfaceDark,
+                        focusedContainerColor = PrimaryYellow,
+                        contentColor = TextPrimary,
+                        focusedContentColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .focusRequester(restartFocus)
+                        .focusProperties {
+                            left = continueFocus
+                            right = closeFocus
+                            up = FocusRequester.Cancel
+                            down = FocusRequester.Cancel
+                        }
+                        .onFocusChanged { restartFocused = it.isFocused }
+                ) {
+                    Text(
+                        text = "从头开始",
+                        color = if (restartFocused) Color.Black else TextPrimary
+                    )
+                }
+                Button(
+                    onClick = onClose,
+                    colors = ButtonDefaults.colors(
+                        containerColor = SurfaceDark,
+                        focusedContainerColor = PrimaryYellow,
+                        contentColor = TextPrimary,
+                        focusedContentColor = Color.Black
+                    ),
+                    modifier = Modifier
+                        .focusRequester(closeFocus)
+                        .focusProperties {
+                            left = restartFocus
+                            right = FocusRequester.Cancel
+                            up = FocusRequester.Cancel
+                            down = FocusRequester.Cancel
+                        }
+                        .onFocusChanged { closeFocused = it.isFocused }
+                ) {
+                    Text(
+                        text = "关闭",
+                        color = if (closeFocused) Color.Black else TextPrimary
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "8秒后自动关闭",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.6f),
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+            }
         }
     }
 }

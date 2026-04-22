@@ -3,8 +3,11 @@ package com.lomen.tv.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.lomen.tv.data.local.database.dao.TmdbEpisodeDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
+import com.lomen.tv.data.local.database.entity.TmdbEpisodeEntity
 import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
+import com.lomen.tv.data.preferences.LibraryScanPreferences
 import com.lomen.tv.data.preferences.TmdbApiPreferences
 import com.lomen.tv.data.scraper.FileFingerprintManager
 import com.lomen.tv.data.scraper.MediaScraper
@@ -14,6 +17,7 @@ import com.lomen.tv.data.scraper.TmdbScraper
 import com.lomen.tv.data.webdav.WebDavClient
 import com.lomen.tv.data.webdav.WebDavFile
 import com.lomen.tv.domain.model.ResourceLibrary
+import com.lomen.tv.domain.service.TmdbMetadataSyncManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,7 +31,10 @@ import javax.inject.Inject
 @HiltViewModel
 class MediaSyncViewModel @Inject constructor(
     private val webDavMediaDao: WebDavMediaDao,
-    private val tmdbApiPreferences: TmdbApiPreferences
+    private val tmdbEpisodeDao: TmdbEpisodeDao,
+    private val tmdbApiPreferences: TmdbApiPreferences,
+    private val libraryScanPreferences: LibraryScanPreferences,
+    private val tmdbMetadataSyncManager: TmdbMetadataSyncManager
 ) : ViewModel() {
 
     companion object {
@@ -49,6 +56,13 @@ class MediaSyncViewModel @Inject constructor(
         object Scraping : SyncState()
         object Completed : SyncState()
         data class Error(val message: String) : SyncState()
+    }
+
+    private fun buildErrorMessage(stage: String, throwable: Throwable?): String {
+        if (throwable == null) return "${stage} failed: unknown"
+        val root = generateSequence(throwable) { it.cause }.last()
+        val detail = root.message?.takeIf { it.isNotBlank() } ?: root.javaClass.simpleName
+        return "${stage} failed: $detail"
     }
 
     /**
@@ -81,7 +95,8 @@ class MediaSyncViewModel @Inject constructor(
 
                 // 1. 扫描WebDAV文件
                 Log.d(TAG, "开始扫描WebDAV文件...")
-                val client = WebDavClient(library)
+                val scanConcurrency = libraryScanPreferences.scanConcurrency.first()
+                val client = WebDavClient(library, scanConcurrency)
                 val filesResult = withContext(Dispatchers.IO) {
                     client.listAllVideoFiles { count ->
                         _syncProgress.value = count to 0 // 扫描阶段，总数未知
@@ -91,7 +106,7 @@ class MediaSyncViewModel @Inject constructor(
                 if (filesResult.isFailure) {
                     val error = filesResult.exceptionOrNull()
                     Log.e(TAG, "扫描失败: ${error?.message}", error)
-                    _syncState.value = SyncState.Error("扫描失败: ${error?.message}")
+                    _syncState.value = SyncState.Error(buildErrorMessage("扫描", error))
                     return@launch
                 }
 
@@ -118,7 +133,7 @@ class MediaSyncViewModel @Inject constructor(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed", e)
-                _syncState.value = SyncState.Error(e.message ?: "未知错误")
+                _syncState.value = SyncState.Error(buildErrorMessage("同步", e))
             }
         }
     }
@@ -136,7 +151,8 @@ class MediaSyncViewModel @Inject constructor(
 
                 // 1. 扫描WebDAV文件
                 Log.d(TAG, "开始扫描WebDAV文件...")
-                val client = WebDavClient(library)
+                val scanConcurrency = libraryScanPreferences.scanConcurrency.first()
+                val client = WebDavClient(library, scanConcurrency)
                 val filesResult = withContext(Dispatchers.IO) {
                     client.listAllVideoFiles { count ->
                         _syncProgress.value = count to 0 // 扫描阶段，总数未知
@@ -146,7 +162,7 @@ class MediaSyncViewModel @Inject constructor(
                 if (filesResult.isFailure) {
                     val error = filesResult.exceptionOrNull()
                     Log.e(TAG, "扫描失败: ${error?.message}", error)
-                    _syncState.value = SyncState.Error("扫描失败: ${error?.message}")
+                    _syncState.value = SyncState.Error(buildErrorMessage("扫描", error))
                     return@launch
                 }
 
@@ -227,7 +243,7 @@ class MediaSyncViewModel @Inject constructor(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Incremental sync failed", e)
-                _syncState.value = SyncState.Error(e.message ?: "未知错误")
+                _syncState.value = SyncState.Error(buildErrorMessage("增量同步", e))
             }
         }
     }
@@ -241,93 +257,170 @@ class MediaSyncViewModel @Inject constructor(
         files: List<WebDavFile>,
         modifiedPaths: Set<String> = emptySet()
     ) {
-        // 使用智能刮削器进行批量刮削（剧集聚类优化）
-        Log.d(TAG, "使用智能刮削器进行批量刮削...")
-        val coverCache = mutableMapOf<String, String?>() // 缓存目录封面，避免重复请求
-
-        val scrapedResults = smartScraper.scrapeBatchOptimized(
-            files = files,
-            onProgress = { current, total ->
-                _syncProgress.value = current to total
-                Log.d(TAG, "刮削进度: $current / $total")
-            },
-            client = client
-        )
-
-        // 为每个结果尝试获取本地封面图片
-        val enrichedResults = scrapedResults.map { scraped ->
-            val directoryPath = scraped.filePath.substringBeforeLast("/", "")
-
-            // 如果没有封面URL，尝试获取本地封面
-            if (scraped.posterUrl == null && directoryPath.isNotEmpty()) {
-                val localCover = coverCache.getOrPut(directoryPath) {
-                    client.getCoverImage(directoryPath)
-                }
-                if (localCover != null) {
-                    scraped.copy(posterUrl = localCover, source = "${scraped.source}+local")
-                } else {
-                    scraped
-                }
-            } else {
-                scraped
-            }
-        }
-
-        // 生成文件指纹并保存到数据库
-        val fileByPath = files.associateBy { it.path }
-        val entities = enrichedResults.map { scraped ->
-            val sourceFile = fileByPath[scraped.filePath]
-            val fingerprint = if (sourceFile != null) {
-                FileFingerprintManager.generateFingerprint(sourceFile)
-            } else {
-                // 兜底：极端情况下找不到源文件信息时，仍使用路径生成稳定指纹
-                FileFingerprintManager.generateFingerprint(scraped.filePath, 0, 0)
-            }
-            
-            // 如果是修改的文件，保持原有的 createdAt
-            val isModified = scraped.filePath in modifiedPaths
-            val currentTime = System.currentTimeMillis()
-            
-            // 如果是修改的文件，从数据库获取原有的 createdAt
-            val createdAt = if (isModified) {
+        try {
+            // 使用智能刮削器进行批量刮削（剧集聚类优化）
+            Log.d(TAG, "使用智能刮削器进行批量刮削...")
+            val coverCache = mutableMapOf<String, String?>() // 缓存目录封面，避免重复请求
+            val fileByPath = files.associateBy { it.path }
+            val modifiedCreatedAtMap = if (modifiedPaths.isNotEmpty()) {
                 withContext(Dispatchers.IO) {
-                    webDavMediaDao.getByFilePath(scraped.filePath)?.createdAt ?: currentTime
-                }
+                    webDavMediaDao.getCreatedAtByFilePaths(modifiedPaths.toList())
+                }.associate { it.filePath to it.createdAt }
             } else {
-                currentTime
+                emptyMap()
             }
-            
-            WebDavMediaEntity(
-                id = scraped.id,
-                libraryId = library.id,
-                title = scraped.title,
-                originalTitle = scraped.originalTitle,
-                overview = scraped.overview,
-                posterUrl = scraped.posterUrl,
-                backdropUrl = scraped.backdropUrl,
-                year = scraped.year,
-                rating = scraped.rating,
-                genres = scraped.genres.joinToString(","),
-                type = scraped.type,  // 使用正确的类型字段
-                isMovie = scraped.isMovie,  // 保留用于向后兼容
-                seasonNumber = scraped.seasonNumber,
-                episodeNumber = scraped.episodeNumber,
-                tmdbId = scraped.tmdbId,  // 保存TMDB ID
-                filePath = scraped.filePath,
-                fileName = scraped.fileName,
-                fileFingerprint = fingerprint,
-                source = scraped.source,
-                createdAt = createdAt,  // 修改的文件保持原 createdAt
-                updatedAt = currentTime  // 总是更新 updatedAt
+
+            suspend fun enrichWithLocalCover(scraped: ScrapedMedia): ScrapedMedia {
+                val directoryPath = scraped.filePath.substringBeforeLast("/", "")
+                if (scraped.posterUrl == null && directoryPath.isNotEmpty()) {
+                    val localCover = coverCache.getOrPut(directoryPath) {
+                        client.getCoverImage(directoryPath)
+                    }
+                    if (localCover != null) {
+                        return scraped.copy(posterUrl = localCover, source = "${scraped.source}+local")
+                    }
+                }
+                return scraped
+            }
+
+            fun toEntity(scraped: ScrapedMedia): WebDavMediaEntity {
+                val sourceFile = fileByPath[scraped.filePath]
+                val fingerprint = if (sourceFile != null) {
+                    FileFingerprintManager.generateFingerprint(sourceFile)
+                } else {
+                    // 兜底：极端情况下找不到源文件信息时，仍使用路径生成稳定指纹
+                    FileFingerprintManager.generateFingerprint(scraped.filePath, 0, 0)
+                }
+
+                // 如果是修改的文件，保持原有的 createdAt
+                val isModified = scraped.filePath in modifiedPaths
+                val currentTime = System.currentTimeMillis()
+
+                // 修改文件使用历史 createdAt，避免逐条查询数据库造成尾段卡顿
+                val createdAt = if (isModified) modifiedCreatedAtMap[scraped.filePath] ?: currentTime else currentTime
+
+                return WebDavMediaEntity(
+                    id = scraped.id,
+                    libraryId = library.id,
+                    title = scraped.title,
+                    originalTitle = scraped.originalTitle,
+                    overview = scraped.overview,
+                    posterUrl = scraped.posterUrl,
+                    backdropUrl = scraped.backdropUrl,
+                    year = scraped.year,
+                    rating = scraped.rating,
+                    genres = scraped.genres.joinToString(","),
+                    type = scraped.type,  // 使用正确的类型字段
+                    isMovie = scraped.isMovie,  // 保留用于向后兼容
+                    seasonNumber = scraped.seasonNumber,
+                    episodeNumber = scraped.episodeNumber,
+                    tmdbId = scraped.tmdbId,  // 保存TMDB ID
+                    filePath = scraped.filePath,
+                    fileName = scraped.fileName,
+                    fileFingerprint = fingerprint,
+                    source = scraped.source,
+                    createdAt = createdAt,  // 修改的文件保持原 createdAt
+                    updatedAt = currentTime  // 总是更新 updatedAt
+                )
+            }
+
+            val scrapedResults = smartScraper.scrapeBatchOptimized(
+                files = files,
+                onProgress = { current, total ->
+                    _syncProgress.value = current to total
+                    Log.d(TAG, "刮削进度: $current / $total")
+                },
+                client = client,
+                onItemsReady = { partial ->
+                    // 流式写库：刮削每成功一批就先显示到首页，避免必须等到100%
+                    val partialEntities = partial
+                        .map { enrichWithLocalCover(it) }
+                        .map { toEntity(it) }
+                    withContext(Dispatchers.IO) {
+                        webDavMediaDao.insertAll(partialEntities)
+                    }
+                }
             )
+
+            // 为每个结果尝试获取本地封面图片
+            val entities = scrapedResults
+                .map { enrichWithLocalCover(it) }
+                .map { toEntity(it) }
+
+            withContext(Dispatchers.IO) {
+                // 最终再全量覆盖一次，确保任何漏掉的条目也能入库
+                webDavMediaDao.insertAll(entities)
+            }
+
+            // 同步预拉单集信息（tmdbId + season），确保“刮削完成”时详情页就有单集封面/标题可读。
+            // 拉取失败的季，再回退到后台队列慢慢补齐。
+            val failedEpisodeTasks = preloadEpisodeMetadataNow(entities)
+
+            // 将 tmdbId 放入后台补全队列：媒体主信息兜底补齐
+            viewModelScope.launch(Dispatchers.IO) {
+                val tmdbIds = entities
+                    .mapNotNull { it.tmdbId?.toIntOrNull() }
+                    .distinct()
+                tmdbIds.forEach { tmdbMetadataSyncManager.enqueueMedia(it, priority = 0) }
+                failedEpisodeTasks.forEach { (tmdbId, season) ->
+                    tmdbMetadataSyncManager.enqueueSeasonEpisodes(tmdbId, season, priority = 0)
+                }
+            }
+
+            Log.d(TAG, "刮削完成，共保存 ${entities.size} 条记录")
+            _syncState.value = SyncState.Completed
+        } catch (e: Exception) {
+            Log.e(TAG, "performScrapeAndSave failed", e)
+            _syncState.value = SyncState.Error(buildErrorMessage("刮削", e))
+        }
+    }
+
+    private suspend fun preloadEpisodeMetadataNow(
+        entities: List<WebDavMediaEntity>
+    ): List<Pair<Int, Int>> = withContext(Dispatchers.IO) {
+        val tasks = entities
+            .asSequence()
+            .filter { it.type != com.lomen.tv.domain.model.MediaType.MOVIE }
+            .mapNotNull { entity ->
+                val tmdbId = entity.tmdbId?.toIntOrNull() ?: return@mapNotNull null
+                val season = (entity.seasonNumber ?: 1).coerceAtLeast(1)
+                tmdbId to season
+            }
+            .distinct()
+            .toList()
+
+        if (tasks.isEmpty()) return@withContext emptyList()
+
+        val scraper = TmdbScraper.getInstance()
+        val failed = mutableListOf<Pair<Int, Int>>()
+        val now = System.currentTimeMillis()
+
+        tasks.forEach { (tmdbId, season) ->
+            val episodes = runCatching {
+                scraper.getTvSeasonEpisodes(tmdbId.toString(), season).orEmpty()
+            }.getOrElse { emptyList() }
+
+            if (episodes.isEmpty()) {
+                failed += (tmdbId to season)
+            } else {
+                val cached = episodes.map { ep ->
+                    TmdbEpisodeEntity(
+                        tmdbId = tmdbId,
+                        seasonNumber = season,
+                        episodeNumber = ep.episodeNumber,
+                        name = ep.name.takeIf { it.isNotBlank() },
+                        overview = ep.overview?.takeIf { it.isNotBlank() },
+                        stillUrl = ep.stillUrl,
+                        airDate = ep.airDate,
+                        runtimeMinutes = ep.runtime.takeIf { it > 0 },
+                        updatedAt = now
+                    )
+                }
+                tmdbEpisodeDao.upsertAll(cached)
+            }
         }
 
-        withContext(Dispatchers.IO) {
-            webDavMediaDao.insertAll(entities)
-        }
-
-        Log.d(TAG, "刮削完成，共保存 ${entities.size} 条记录")
-        _syncState.value = SyncState.Completed
+        failed
     }
 
     fun clearLibraryMedia(libraryId: String) {

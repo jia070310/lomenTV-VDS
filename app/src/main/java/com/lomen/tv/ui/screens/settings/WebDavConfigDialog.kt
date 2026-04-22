@@ -666,7 +666,9 @@ private fun WebDavQrCodeConfig(
 
     // 启动服务器
     LaunchedEffect(Unit) {
-        val ip = getLocalIpAddress() ?: "192.168.1.100"
+        val ip = withContext(Dispatchers.IO) {
+            getLocalIpAddress() ?: "192.168.1.100"
+        }
         serverUrl = "http://$ip:8893"
         
         server.startServer { config ->
@@ -787,8 +789,7 @@ private fun WebDavQrCodeConfig(
             } else {
                 // 显示二维码
                 QrCodeView(
-                    serverUrl = serverUrl,
-                    isRunning = isServerRunning
+                    serverUrl = serverUrl
                 )
             }
         }
@@ -818,34 +819,19 @@ private fun WebDavQrCodeConfig(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun QrCodeView(
-    serverUrl: String,
-    isRunning: Boolean
+    serverUrl: String
 ) {
-    val qrCodeBitmap = rememberQrCodeBitmap(serverUrl)
-
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 二维码 - 使用百分比尺寸，缩小高度
-        Box(
+        QrCodeImage(
+            text = serverUrl,
             modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .heightIn(max = DialogDimens.QrImageMaxHeight)
-                .clip(RoundedCornerShape(12.dp))
-                .background(androidx.compose.ui.graphics.Color.White)
-                .padding(8.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            qrCodeBitmap?.let { bitmap ->
-                Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "配置二维码",
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
+                .fillMaxWidth(0.53f)
+                .height(DialogDimens.QrImageMaxHeight)
+        )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         // 扫码提示
         Text(
@@ -855,7 +841,7 @@ private fun QrCodeView(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(2.dp))
 
         // 浏览器访问地址
         Column(
@@ -870,7 +856,9 @@ private fun QrCodeView(
             Text(
                 text = serverUrl,
                 style = MaterialTheme.typography.bodySmall,
-                color = PrimaryYellow
+                color = PrimaryYellow,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
@@ -1423,17 +1411,18 @@ fun WebDavServerAddedHintDialog(
                 .widthIn(min = DialogDimens.SuccessHintWidthMin, max = DialogDimens.SuccessHintWidthMax)
                 .padding(12.dp)
                 .onPreviewKeyEvent { keyEvent ->
-                    if (keyEvent.key in listOf(
-                            Key.DirectionUp, Key.DirectionDown,
-                            Key.DirectionLeft, Key.DirectionRight
-                        )
-                    ) {
-                        true
-                    } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
-                        onDismiss()
-                        true
-                    } else {
-                        false
+                    when (keyEvent.key) {
+                        Key.DirectionUp,
+                        Key.DirectionDown,
+                        Key.DirectionLeft,
+                        Key.DirectionRight -> true
+                        Key.Back -> {
+                            if (keyEvent.type == KeyEventType.KeyUp) {
+                                onDismiss()
+                            }
+                            true
+                        }
+                        else -> false
                     }
                 }
                 .focusProperties {
@@ -1525,19 +1514,18 @@ private fun ErrorDialog(
             .fillMaxSize()
             .background(BackgroundDark.copy(alpha = 0.9f))
             .onPreviewKeyEvent { keyEvent ->
-                // 拦截所有方向键，锁定焦点在当前窗口
-                if (keyEvent.key in listOf(
-                    Key.DirectionUp, Key.DirectionDown, 
-                    Key.DirectionLeft, Key.DirectionRight
-                )) {
-                    // 方向键直接拦截，不传递
-                    true
-                } else if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
-                    // 返回键关闭对话框
-                    onDismiss()
-                    true
-                } else {
-                    false
+                when (keyEvent.key) {
+                    Key.DirectionUp,
+                    Key.DirectionDown,
+                    Key.DirectionLeft,
+                    Key.DirectionRight -> true
+                    Key.Back -> {
+                        if (keyEvent.type == KeyEventType.KeyUp) {
+                            onDismiss()
+                        }
+                        true
+                    }
+                    else -> false
                 }
             }
             .clickable(

@@ -1,24 +1,17 @@
 package com.lomen.tv.ui.screens.settings
 
-import android.graphics.Bitmap
 import android.widget.Toast
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
@@ -35,9 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -48,8 +39,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -57,12 +46,8 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.IconButton
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import com.lomen.tv.data.preferences.TmdbApiPreferences
-import com.lomen.tv.ui.theme.BackgroundDark
 import com.lomen.tv.ui.theme.PrimaryYellow
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
@@ -78,20 +63,11 @@ fun TmdbApiSettingsDialog(
     tmdbApiViewModel: TmdbApiViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    
-    // 获取当前状态
-    val currentApiKey by tmdbApiViewModel.apiKey.collectAsState(initial = TmdbApiPreferences.DEFAULT_API_KEY)
     val isServerRunning by tmdbApiViewModel.isServerRunning.collectAsState()
-    val hasCustomKey by tmdbApiViewModel.hasCustomApiKey.collectAsState(initial = false)
-    
+
     // 服务器地址
     val serverUrl = tmdbApiViewModel.serverUrl
-    
-    // 生成二维码 - 增大尺寸以获得更清晰的二维码
-    val qrCodeBitmap = remember(serverUrl) {
-        generateQRCode(serverUrl, 320)
-    }
-    
+
     // 焦点管理 - 创建外部容器的焦点请求器
     val closeButtonFocus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -209,7 +185,7 @@ fun TmdbApiSettingsDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     // 说明文字
                     Text(
@@ -219,28 +195,17 @@ fun TmdbApiSettingsDialog(
                         textAlign = TextAlign.Center
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
 
-                    // 二维码 - 使用百分比尺寸以适应不同分辨率，缩小高度
-                    if (qrCodeBitmap != null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(0.6f)
-                                .heightIn(max = DialogDimens.QrImageMaxHeight)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color.White)
-                                .padding(8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                bitmap = qrCodeBitmap.asImageBitmap(),
-                                contentDescription = "配置二维码",
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
+                    // 二维码样式与直播设置保持一致
+                    QrCodeImage(
+                        text = serverUrl,
+                        modifier = Modifier
+                            .fillMaxWidth(0.53f)
+                            .height(DialogDimens.QrImageMaxHeight)
+                    )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     // 服务器地址
                     Column(
@@ -255,11 +220,13 @@ fun TmdbApiSettingsDialog(
                         Text(
                             text = serverUrl,
                             style = MaterialTheme.typography.bodySmall,
-                            color = PrimaryYellow
+                            color = PrimaryYellow,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
                     // 提示信息
                     Text(
@@ -280,24 +247,3 @@ fun TmdbApiSettingsDialog(
     }
 }
 
-/**
- * 生成二维码
- */
-private fun generateQRCode(content: String, size: Int): Bitmap? {
-    return try {
-        val writer = QRCodeWriter()
-        val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
-        val width = bitMatrix.width
-        val height = bitMatrix.height
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
-        
-        for (x in 0 until width) {
-            for (y in 0 until height) {
-                bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-            }
-        }
-        bitmap
-    } catch (e: Exception) {
-        null
-    }
-}

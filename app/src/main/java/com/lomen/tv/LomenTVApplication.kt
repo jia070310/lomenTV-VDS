@@ -5,6 +5,7 @@ import com.lomen.tv.data.preferences.MediaClassificationPreferences
 import com.lomen.tv.data.preferences.MediaClassificationStrategyHolder
 import com.lomen.tv.domain.service.AppUpdateService
 import com.lomen.tv.domain.service.PlaybackStatsService
+import com.lomen.tv.domain.service.TmdbMetadataSyncManager
 import dagger.hilt.android.HiltAndroidApp
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
@@ -27,6 +28,9 @@ class LomenTVApplication : android.app.Application() {
     @Inject
     lateinit var mediaClassificationPreferences: MediaClassificationPreferences
 
+    @Inject
+    lateinit var tmdbMetadataSyncManager: TmdbMetadataSyncManager
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -34,6 +38,7 @@ class LomenTVApplication : android.app.Application() {
             val strategy = mediaClassificationPreferences.classificationStrategy.first()
             MediaClassificationStrategyHolder.update(strategy)
         }
+        tmdbMetadataSyncManager.start()
     }
 
     companion object {

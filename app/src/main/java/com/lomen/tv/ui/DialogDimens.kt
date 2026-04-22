@@ -14,7 +14,7 @@ object DialogDimens {
     val CardHeightSort = 480.dp
 
     val CardWidthClassification = 576.dp
-    val CardHeightClassification = 336.dp
+    val CardHeightClassification = 560.dp
 
     /** 历史直播源 / UA / 节目单 等 AlertDialog */
     val CardWidthHistoryList = 480.dp
@@ -23,7 +23,7 @@ object DialogDimens {
     val QrCardWidth = 280.dp
     val QrCardHeight = 310.dp
     val QrCardPadding = 16.dp
-    val QrImageMaxHeight = 160.dp
+    val QrImageMaxHeight = 148.dp
 
     /** 添加成功等提示卡片 */
     val SuccessHintWidthMin = 220.dp

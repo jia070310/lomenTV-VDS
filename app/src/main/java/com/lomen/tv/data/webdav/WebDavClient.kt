@@ -8,6 +8,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -28,7 +30,10 @@ data class WebDavFile(
     val lastModified: String = ""
 )
 
-class WebDavClient(private val library: ResourceLibrary) {
+class WebDavClient(
+    private val library: ResourceLibrary,
+    private val scanConcurrency: Int = 10
+) {
     companion object {
         private const val TAG = "WebDavClient"
         private val VIDEO_EXTENSIONS = listOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp")
@@ -39,6 +44,12 @@ class WebDavClient(private val library: ResourceLibrary) {
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    @Volatile
+    private var openListToken: String? = null
+    private val openListTokenMutex = Mutex()
+    @Volatile
+    private var preferOpenListApi: Boolean = false
 
     /** 
      * 返回WebDAV基础URL（包含用户配置的完整路径）
@@ -65,6 +76,11 @@ class WebDavClient(private val library: ResourceLibrary) {
 
     suspend fun listFiles(relativePath: String = ""): Result<List<WebDavFile>> = withContext(Dispatchers.IO) {
         try {
+            if (preferOpenListApi) {
+                val openListResult = tryOpenListApi(relativePath)
+                if (openListResult.isSuccess) return@withContext openListResult
+            }
+
             // 构建完整URL（用户配置的完整路径 + 相对子路径）
             val baseUrl = getBaseUrl()
             val cleanPath = if (relativePath.startsWith("/")) relativePath.substring(1) else relativePath
@@ -121,6 +137,7 @@ class WebDavClient(private val library: ResourceLibrary) {
                     // 检查是否是OpenList应用
                     if (responseBody.contains("OpenList")) {
                         Log.d(TAG, "Detected OpenList app, trying API...")
+                        preferOpenListApi = true
                         getResponse.close()
                         // 尝试OpenList API
                         return@withContext tryOpenListApi(relativePath)
@@ -155,16 +172,9 @@ class WebDavClient(private val library: ResourceLibrary) {
                 }
             """.trimIndent()
             
-            val requestBuilder = Request.Builder()
-                .url(apiUrl)
-                .post(jsonBody.toRequestBody("application/json".toMediaType()))
-            
-            // OpenList可能需要token，先尝试Basic Auth
-            createAuthHeader()?.let {
-                requestBuilder.header("Authorization", it)
-            }
-            
-            val request = requestBuilder.build()
+            // 优先使用已缓存 token，避免每个目录都先触发 401
+            val token = openListToken ?: getOrRefreshOpenListToken()
+            val request = buildOpenListListRequest(apiUrl, jsonBody, token ?: createAuthHeader())
             val response = client.newCall(request).execute()
             
             val responseBody = response.body?.string() ?: ""
@@ -174,6 +184,7 @@ class WebDavClient(private val library: ResourceLibrary) {
             // 检查HTTP状态码
             if (response.code == 401) {
                 Log.w(TAG, "OpenList HTTP 401, requires authentication token")
+                openListToken = null
                 return@withContext tryOpenListLoginAndList(relativePath)
             }
             
@@ -193,6 +204,7 @@ class WebDavClient(private val library: ResourceLibrary) {
             val businessCode = jsonResponse.optInt("code", 200)
             if (businessCode == 401) {
                 Log.w(TAG, "OpenList business code 401, requires authentication token")
+                openListToken = null
                 return@withContext tryOpenListLoginAndList(relativePath)
             }
             
@@ -212,40 +224,8 @@ class WebDavClient(private val library: ResourceLibrary) {
     
     private suspend fun tryOpenListLoginAndList(relativePath: String): Result<List<WebDavFile>> = withContext(Dispatchers.IO) {
         try {
-            // 尝试登录获取token
-            val loginUrl = getBaseUrl() + "api/auth/login"
-            Log.d(TAG, "Trying OpenList login: $loginUrl")
-            
-            val loginBody = """
-                {
-                    "username": "${library.username}",
-                    "password": "${library.password}"
-                }
-            """.trimIndent()
-            
-            val loginRequest = Request.Builder()
-                .url(loginUrl)
-                .post(loginBody.toRequestBody("application/json".toMediaType()))
-                .build()
-            
-            val loginResponse = client.newCall(loginRequest).execute()
-            val loginResponseBody = loginResponse.body?.string() ?: ""
-            
-            Log.d(TAG, "Login response: ${loginResponseBody.take(500)}")
-            
-            if (!loginResponse.isSuccessful) {
-                Log.e(TAG, "OpenList login failed: ${loginResponse.code}")
-                return@withContext Result.failure(Exception("Login failed: HTTP ${loginResponse.code}"))
-            }
-            
-            // 解析token
-            val token = parseOpenListToken(loginResponseBody)
-            if (token == null) {
-                Log.e(TAG, "Failed to get token from login response")
-                return@withContext Result.failure(Exception("Failed to get token"))
-            }
-            
-            Log.d(TAG, "Got token: ${token.take(20)}...")
+            val token = getOrRefreshOpenListToken(forceRefresh = true)
+                ?: return@withContext Result.failure(Exception("Failed to get token"))
             
             // 使用token获取文件列表
             val apiUrl = getBaseUrl() + "api/fs/list"
@@ -257,11 +237,7 @@ class WebDavClient(private val library: ResourceLibrary) {
                 }
             """.trimIndent()
             
-            val request = Request.Builder()
-                .url(apiUrl)
-                .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                .header("Authorization", token)
-                .build()
+            val request = buildOpenListListRequest(apiUrl, jsonBody, token)
             
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
@@ -271,6 +247,18 @@ class WebDavClient(private val library: ResourceLibrary) {
             if (!response.isSuccessful) {
                 Log.e(TAG, "OpenList list failed: ${response.code}")
                 return@withContext Result.failure(Exception("List failed: HTTP ${response.code}"))
+            }
+
+            val jsonResponse = try {
+                org.json.JSONObject(responseBody)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse list JSON response", e)
+                return@withContext Result.failure(e)
+            }
+            if (jsonResponse.optInt("code", 200) == 401) {
+                // token 失效时清空缓存，交给下一次请求重登
+                openListToken = null
+                return@withContext Result.failure(Exception("OpenList token invalidated"))
             }
             
             val files = parseOpenListResponse(responseBody, relativePath)
@@ -295,6 +283,53 @@ class WebDavClient(private val library: ResourceLibrary) {
             Log.e(TAG, "Failed to parse token", e)
             null
         }
+    }
+
+    private fun buildOpenListListRequest(
+        apiUrl: String,
+        jsonBody: String,
+        authHeader: String?
+    ): Request {
+        return Request.Builder()
+            .url(apiUrl)
+            .post(jsonBody.toRequestBody("application/json".toMediaType()))
+            .apply {
+                authHeader?.let { header("Authorization", it) }
+            }
+            .build()
+    }
+
+    private suspend fun getOrRefreshOpenListToken(forceRefresh: Boolean = false): String? = openListTokenMutex.withLock {
+        if (!forceRefresh) {
+            openListToken?.let { return it }
+        }
+        val loginUrl = getBaseUrl() + "api/auth/login"
+        Log.d(TAG, "Trying OpenList login: $loginUrl")
+        val loginBody = """
+            {
+                "username": "${library.username}",
+                "password": "${library.password}"
+            }
+        """.trimIndent()
+        val loginRequest = Request.Builder()
+            .url(loginUrl)
+            .post(loginBody.toRequestBody("application/json".toMediaType()))
+            .build()
+        val loginResponse = client.newCall(loginRequest).execute()
+        val loginResponseBody = loginResponse.body?.string() ?: ""
+        Log.d(TAG, "Login response: ${loginResponseBody.take(500)}")
+        if (!loginResponse.isSuccessful) {
+            Log.e(TAG, "OpenList login failed: ${loginResponse.code}")
+            return null
+        }
+        val token = parseOpenListToken(loginResponseBody)
+        if (token.isNullOrBlank()) {
+            Log.e(TAG, "Failed to get token from login response")
+            return null
+        }
+        Log.d(TAG, "Got token: ${token.take(20)}...")
+        openListToken = token
+        token
     }
     
     private fun parseOpenListResponse(json: String, parentPath: String): List<WebDavFile> {
@@ -415,74 +450,72 @@ class WebDavClient(private val library: ResourceLibrary) {
             val startPath = ""
             Log.d(TAG, "Starting to scan all video files from: ${getBaseUrl()}")
             val allVideos = mutableListOf<WebDavFile>()
-            val scannedDirs = mutableSetOf<String>()
-            val dirsToScan = java.util.concurrent.ConcurrentLinkedQueue<String>().apply {
-                add(startPath)
-            }
-            
-            // 并发扫描目录，限制并发数为10
-            val maxConcurrency = 10
+            val allVideosLock = Mutex()
+            val enqueuedDirs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            val scannedDirs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            val dirsToScan = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val pendingDirs = java.util.concurrent.atomic.AtomicInteger(1)
+            dirsToScan.offer(startPath)
+            enqueuedDirs.add(startPath)
+
+            // 并发扫描目录，限制并发数（可配置）
+            val maxConcurrency = scanConcurrency.coerceIn(4, 20)
             val semaphore = Semaphore(maxConcurrency)
-            
+
             coroutineScope {
-                while (true) {
-                    val currentBatch = mutableListOf<String>()
-                    repeat(maxConcurrency) {
-                        dirsToScan.poll()?.let { currentBatch.add(it) }
-                    }
-                    
-                    if (currentBatch.isEmpty() && scannedDirs.isNotEmpty()) {
-                        // 等待所有任务完成
-                        break
-                    }
-                    
-                    if (currentBatch.isEmpty()) break
-                    
-                    currentBatch.map { dirPath ->
-                        async {
+                val workers = List(maxConcurrency) {
+                    async {
+                        while (true) {
+                            val dirPath = dirsToScan.poll()
+                            if (dirPath == null) {
+                                if (pendingDirs.get() == 0) break
+                                continue
+                            }
                             semaphore.acquire()
                             try {
-                                if (scannedDirs.contains(dirPath)) {
-                                    return@async emptyList<WebDavFile>()
+                                if (!scannedDirs.add(dirPath)) {
+                                    continue
                                 }
-                                scannedDirs.add(dirPath)
-                                
+
                                 val filesResult = listFiles(dirPath)
                                 if (filesResult.isFailure) {
-                                    Log.e(TAG, "Failed to scan directory: $dirPath, error: ${filesResult.exceptionOrNull()?.message}")
-                                    return@async emptyList<WebDavFile>()
+                                    Log.e(
+                                        TAG,
+                                        "Failed to scan directory: $dirPath, error: ${filesResult.exceptionOrNull()?.message}"
+                                    )
+                                    continue
                                 }
-                                
-                                val files = filesResult.getOrNull() ?: return@async emptyList<WebDavFile>()
+
+                                val files = filesResult.getOrNull().orEmpty()
                                 val videos = mutableListOf<WebDavFile>()
-                                val subDirs = mutableListOf<String>()
-                                
+
                                 for (file in files) {
                                     if (file.name == "." || file.name == "..") continue
-                                    
                                     if (file.isDirectory) {
-                                        subDirs.add(file.path)
+                                        val subDir = file.path
+                                        if (enqueuedDirs.add(subDir)) {
+                                            pendingDirs.incrementAndGet()
+                                            dirsToScan.offer(subDir)
+                                        }
                                     } else if (isVideoFile(file.name)) {
                                         videos.add(file)
                                     }
                                 }
-                                
-                                // 添加子目录到待扫描列表
-                                subDirs.forEach { dirsToScan.offer(it) }
-                                
-                                videos
+
+                                if (videos.isNotEmpty()) {
+                                    allVideosLock.withLock {
+                                        allVideos.addAll(videos)
+                                        onProgress?.invoke(allVideos.size)
+                                    }
+                                }
                             } finally {
+                                pendingDirs.decrementAndGet()
                                 semaphore.release()
                             }
                         }
-                    }.forEach { deferred ->
-                        val videos = deferred.await()
-                        synchronized(allVideos) {
-                            allVideos.addAll(videos)
-                            onProgress?.invoke(allVideos.size)
-                        }
                     }
                 }
+                workers.awaitAll()
             }
             
             Log.d(TAG, "Scan complete, found ${allVideos.size} video files")

@@ -63,6 +63,8 @@ class TmdbScraper private constructor() {
     // 用户自定义的 API Key
     private var customApiKey: String? = null
     private var customApiReadToken: String? = null
+    @Volatile
+    private var preferApiKeyUntilMs: Long = 0L
     
     /**
      * 设置用户自定义的 API Key
@@ -155,6 +157,27 @@ class TmdbScraper private constructor() {
         } catch (e: Exception) {
             Log.e(TAG, "Search movie failed: ${e.message}", e)
             null
+        }
+    }
+
+    /**
+     * 返回电影候选列表（用于手动纠正匹配）
+     */
+    suspend fun searchMovieCandidates(title: String, year: Int? = null, limit: Int = 8): List<ScrapeResult> = withContext(Dispatchers.IO) {
+        try {
+            val query = URLEncoder.encode(title, "UTF-8")
+            var url = "$BASE_URL/search/movie?query=$query&language=zh-CN"
+            if (year != null) {
+                url += "&year=$year"
+            }
+            val result = makeRequest(url) ?: run {
+                val enUrl = "$BASE_URL/search/movie?query=$query&language=en-US"
+                makeRequest(enUrl)
+            }
+            parseMovieResults(result, limit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to search movie candidates: $title", e)
+            emptyList()
         }
     }
     
@@ -289,8 +312,8 @@ class TmdbScraper private constructor() {
             ScrapeResult(
                 id = item.getInt("id").toString(),
                 title = item.optString("title", ""),
-                originalTitle = item.optString("original_title", null),
-                overview = item.optString("overview", null),
+                originalTitle = item.optStringOrNull("original_title"),
+                overview = item.optStringOrNull("overview"),
                 posterUrl = if (posterPath.isNotEmpty()) IMAGE_BASE_URL + posterPath else null,
                 backdropUrl = if (backdropPath.isNotEmpty()) BACKDROP_BASE_URL + backdropPath else null,
                 year = item.optString("release_date", "").take(4).toIntOrNull(),
@@ -312,8 +335,8 @@ class TmdbScraper private constructor() {
             ScrapeResult(
                 id = item.getInt("id").toString(),
                 title = item.optString("name", ""),
-                originalTitle = item.optString("original_name", null),
-                overview = item.optString("overview", null),
+                originalTitle = item.optStringOrNull("original_name"),
+                overview = item.optStringOrNull("overview"),
                 posterUrl = if (posterPath.isNotEmpty()) IMAGE_BASE_URL + posterPath else null,
                 backdropUrl = if (backdropPath.isNotEmpty()) BACKDROP_BASE_URL + backdropPath else null,
                 year = item.optString("first_air_date", "").take(4).toIntOrNull(),
@@ -355,6 +378,27 @@ class TmdbScraper private constructor() {
         } catch (e: Exception) {
             Log.e(TAG, "Search TV failed: ${e.message}", e)
             null
+        }
+    }
+
+    /**
+     * 返回电视剧候选列表（用于手动纠正匹配）
+     */
+    suspend fun searchTvCandidates(title: String, year: Int? = null, limit: Int = 8): List<ScrapeResult> = withContext(Dispatchers.IO) {
+        try {
+            val query = URLEncoder.encode(title, "UTF-8")
+            var url = "$BASE_URL/search/tv?query=$query&language=zh-CN"
+            if (year != null) {
+                url += "&first_air_date_year=$year"
+            }
+            val result = makeRequest(url) ?: run {
+                val enUrl = "$BASE_URL/search/tv?query=$query&language=en-US"
+                makeRequest(enUrl)
+            }
+            parseTvResults(result, limit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to search tv candidates: $title", e)
+            emptyList()
         }
     }
     
@@ -607,6 +651,16 @@ class TmdbScraper private constructor() {
         "api.tmdb.org"
     )
 
+    private fun shouldTryBearerFirst(): Boolean {
+        val now = System.currentTimeMillis()
+        return getApiReadToken().isNotBlank() && now >= preferApiKeyUntilMs
+    }
+
+    private fun markBearerFailedTemporarily() {
+        // 慢网环境下 Bearer 常先超时，短时间内直接优先 API Key，避免每次都多等一轮失败。
+        preferApiKeyUntilMs = System.currentTimeMillis() + 2 * 60 * 1000L
+    }
+
     private fun makeRequest(urlString: String): JSONObject? {
         if (getApiKey().isBlank() && getApiReadToken().isBlank()) {
             Log.w(TAG, "TMDB API 未配置，跳过请求")
@@ -617,18 +671,23 @@ class TmdbScraper private constructor() {
             val modifiedUrl = urlString.replace("api.themoviedb.org", host)
             Log.d(TAG, "Trying host: $host")
 
-            // 尝试使用Bearer Token方式
-            var result = makeRequestWithBearer(modifiedUrl)
-            if (result != null) {
-                Log.d(TAG, "Success with host: $host")
-                return result
+            if (shouldTryBearerFirst()) {
+                // Bearer Token 优先路径
+                val bearerResult = makeRequestWithBearer(modifiedUrl)
+                if (bearerResult != null) {
+                    Log.d(TAG, "Success with host: $host")
+                    return bearerResult
+                }
+                markBearerFailedTemporarily()
+            } else if (getApiReadToken().isNotBlank()) {
+                Log.d(TAG, "Skip Bearer (temporary API Key preference)")
             }
 
-            // 如果Bearer Token失败，尝试使用API Key方式
-            result = makeRequestWithApiKey(modifiedUrl)
-            if (result != null) {
+            // API Key 兜底/优先路径
+            val apiResult = makeRequestWithApiKey(modifiedUrl)
+            if (apiResult != null) {
                 Log.d(TAG, "Success with API Key on host: $host")
-                return result
+                return apiResult
             }
         }
 
@@ -716,6 +775,18 @@ class TmdbScraper private constructor() {
         )
     }
 
+    private fun parseMovieResults(json: JSONObject?, limit: Int): List<ScrapeResult> {
+        if (json == null) return emptyList()
+        val results = json.optJSONArray("results") ?: return emptyList()
+        val list = mutableListOf<ScrapeResult>()
+        val end = minOf(limit, results.length())
+        for (i in 0 until end) {
+            val item = results.optJSONObject(i) ?: continue
+            parseMovieResultFromItem(item)?.let { list.add(it) }
+        }
+        return list
+    }
+
     private fun parseTvResult(json: JSONObject?): ScrapeResult? {
         if (json == null) return null
 
@@ -738,6 +809,18 @@ class TmdbScraper private constructor() {
             genres = emptyList(),
             isMovie = false
         )
+    }
+
+    private fun parseTvResults(json: JSONObject?, limit: Int): List<ScrapeResult> {
+        if (json == null) return emptyList()
+        val results = json.optJSONArray("results") ?: return emptyList()
+        val list = mutableListOf<ScrapeResult>()
+        val end = minOf(limit, results.length())
+        for (i in 0 until end) {
+            val item = results.optJSONObject(i) ?: continue
+            parseTvResultFromItem(item)?.let { list.add(it) }
+        }
+        return list
     }
 
     private fun JSONObject.optStringOrNull(key: String): String? {
@@ -779,9 +862,9 @@ class TmdbScraper private constructor() {
         return PersonResult(
             id = first.getInt("id").toString(),
             name = first.optString("name", ""),
-            originalName = first.optString("original_name", null),
+            originalName = first.optStringOrNull("original_name"),
             profileUrl = if (profilePath.isNotEmpty()) IMAGE_BASE_URL + profilePath else null,
-            knownFor = first.optString("known_for_department", null)
+            knownFor = first.optStringOrNull("known_for_department")
         )
     }
 }

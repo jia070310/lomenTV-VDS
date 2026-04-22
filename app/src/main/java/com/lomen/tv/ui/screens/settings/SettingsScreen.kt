@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -155,6 +157,7 @@ fun SettingsScreen(
     var showForceRescrapeDialog by remember { mutableStateOf(false) }
     var showClearWatchHistoryDialog by remember { mutableStateOf(false) }
     var showClearPlaybackStatsDialog by remember { mutableStateOf(false) }
+    var showScrapeRuleDialog by remember { mutableStateOf(false) }
     var showTmdbApiDialog by remember { mutableStateOf(false) }
     var showClearTmdbApiDialog by remember { mutableStateOf(false) }
     var showSuccessMessage by remember { mutableStateOf<String?>(null) }
@@ -211,6 +214,7 @@ fun SettingsScreen(
                 onShowClearTmdbApiDialog = { showClearTmdbApiDialog = true },
                 onShowVersionUpdateDialog = { showVersionUpdateDialog = true },
                 onShowClearPlaybackStatsDialog = { showClearPlaybackStatsDialog = true },
+                onShowScrapeRuleDialog = { showScrapeRuleDialog = true },
                 hasUpdate = hasUpdate,
                 versionInfo = versionInfo,
                 hasCustomTmdbKey = hasCustomTmdbKey,
@@ -514,6 +518,12 @@ fun SettingsScreen(
             onDismiss = { showClearPlaybackStatsDialog = false }
         )
     }
+
+    if (showScrapeRuleDialog) {
+        ScrapeRuleDialog(
+            onDismiss = { showScrapeRuleDialog = false }
+        )
+    }
 }
 
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -690,6 +700,7 @@ private fun SettingsContent(
     onShowClearTmdbApiDialog: () -> Unit,
     onShowVersionUpdateDialog: () -> Unit,
     onShowClearPlaybackStatsDialog: () -> Unit,
+    onShowScrapeRuleDialog: () -> Unit,
     hasUpdate: Boolean,
     versionInfo: VersionInfo?,
     hasCustomTmdbKey: Boolean = false,
@@ -772,7 +783,8 @@ private fun SettingsContent(
                             hasUpdate = hasUpdate,
                             versionInfo = versionInfo,
                             onVersionUpdateClick = onShowVersionUpdateDialog,
-                            onStatsClick = onShowClearPlaybackStatsDialog
+                            onStatsClick = onShowClearPlaybackStatsDialog,
+                            onScrapeRuleClick = onShowScrapeRuleDialog
                         )
                     }
                 }
@@ -856,11 +868,21 @@ private fun HomeSettingsSection(
     val currentLibrary = resourceLibraryViewModel.getCurrentLibrary()
     val context = LocalContext.current
     val classificationPrefs = remember { MediaClassificationPreferences(context) }
+    val scanPrefs = remember { com.lomen.tv.data.preferences.LibraryScanPreferences(context) }
     val strategyLabel by classificationPrefs.classificationStrategy.collectAsState(
         initial = MediaClassificationPreferences.DEFAULT_STRATEGY
     )
+    val scanConcurrency by scanPrefs.scanConcurrency.collectAsState(
+        initial = com.lomen.tv.data.preferences.LibraryScanPreferences.DEFAULT_SCAN_CONCURRENCY
+    )
+    val coroutineScope = rememberCoroutineScope()
     val s = LocalCompactUiScale.current
     val gap = 16.dp.scale(s)
+    val scanConcurrencyLabel = when (scanConcurrency) {
+        6 -> "低（更稳，适合弱网络）"
+        14 -> "高（更快，适合高性能服务器）"
+        else -> "中（推荐）"
+    }
     
     Column {
         // 媒体分类排序
@@ -878,6 +900,8 @@ private fun HomeSettingsSection(
         Spacer(modifier = Modifier.height(gap))
 
         val strategySubtitle = when (strategyLabel) {
+            MediaClassificationStrategy.SMART_BALANCED ->
+                "当前：智能均衡（综合季集结构与类型词，优先减少误判，推荐）"
             MediaClassificationStrategy.KEYWORD_FIRST ->
                 "当前：关键词优先（路径/文件名中的类型词优先于季集结构）"
             MediaClassificationStrategy.STRUCTURE_FIRST ->
@@ -935,6 +959,25 @@ private fun HomeSettingsSection(
             modifier = Modifier.fillMaxWidth()
         )
         
+        Spacer(modifier = Modifier.height(gap))
+
+        SettingCard(
+            icon = Icons.Default.Speed,
+            iconBackgroundColor = Color.White.copy(alpha = 0.4f),
+            iconTint = Color(0xFF22c55e),
+            title = "资源扫描并发",
+            subtitle = "当前：$scanConcurrencyLabel（$scanConcurrency 线程，点击循环切换）",
+            onClick = {
+                val levels = com.lomen.tv.data.preferences.LibraryScanPreferences.AVAILABLE_CONCURRENCY_LEVELS
+                val currentIndex = levels.indexOf(scanConcurrency)
+                val nextIndex = if (currentIndex == -1 || currentIndex == levels.lastIndex) 0 else currentIndex + 1
+                coroutineScope.launch {
+                    scanPrefs.setScanConcurrency(levels[nextIndex])
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+
         Spacer(modifier = Modifier.height(gap))
         
         // 清除缓存
@@ -1105,7 +1148,8 @@ private fun AboutSection(
     hasUpdate: Boolean,
     versionInfo: VersionInfo?,
     onVersionUpdateClick: () -> Unit,
-    onStatsClick: () -> Unit
+    onStatsClick: () -> Unit,
+    onScrapeRuleClick: () -> Unit
 ) {
     val s = LocalCompactUiScale.current
     val homeViewModel: com.lomen.tv.ui.screens.home.HomeViewModel = hiltViewModel()
@@ -1158,6 +1202,18 @@ private fun AboutSection(
 
         Spacer(modifier = Modifier.height(32.dp.scale(s)))
 
+        SettingCard(
+            icon = Icons.Default.Info,
+            iconBackgroundColor = Color.White.copy(alpha = 0.4f),
+            iconTint = Color(0xFF60a5fa),
+            title = "刮削规则",
+            subtitle = "查看支持的文件夹命名与文件名识别规则",
+            onClick = onScrapeRuleClick,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp.scale(s)))
+
         // 应用信息
         var isFocused by remember { mutableStateOf(false) }
         Card(
@@ -1209,6 +1265,122 @@ private fun AboutSection(
                     ),
                     color = if (isFocused) Color.Black.copy(alpha = 0.7f) else TextMuted
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
+@Composable
+private fun ScrapeRuleDialog(
+    onDismiss: () -> Unit
+) {
+    val s = LocalCompactUiScale.current
+    val scrollState = rememberScrollState()
+    var closeFocused by remember { mutableStateOf(false) }
+    val closeFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        closeFocusRequester.requestFocus()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            }
+            .clickable(
+                onClick = { },
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            onClick = {},
+            colors = CardDefaults.colors(
+                containerColor = SurfaceDark,
+                focusedContainerColor = SurfaceDark
+            ),
+            modifier = Modifier
+                .width(900.dp.scale(s))
+                .height(620.dp.scale(s))
+                .padding(24.dp.scale(s))
+                .focusProperties {
+                    // 弹窗打开后禁止焦点跳出弹窗
+                    exit = { FocusRequester.Cancel }
+                }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp.scale(s))
+            ) {
+                Text(
+                    text = "刮削规则说明",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(12.dp.scale(s)))
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState)
+                ) {
+                    Text("1. 扫描范围：会递归扫描网盘目录中的视频文件。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("2. 文件夹结构优先：若目录中包含季/集结构（如 S01、Season 1、第1季），优先识别为剧集。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("3. 文件名识别季集：支持 S01E01、S1E2、第01集、E03、EP04 等常见命名。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("4. 类型关键词识别：文件夹或文件名包含 电影、剧场版、动漫、综艺、纪录片、演唱会 等关键词时，会辅助分类。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("5. NFO 优先：同目录存在 .nfo 时优先读取本地元数据（标题、简介、年份等）。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("6. 在线补全：本地信息不足时再请求 TMDB/豆瓣补全封面与详情。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("7. 增量规则：按文件指纹判断变更，未变化文件会跳过，已变化文件重新刮削。", color = TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp.scale(s)))
+                    Text("8. 流式展示：刮削每成功一批会立即入库，首页会按成功比例逐步显示。", color = TextSecondary)
+                }
+                Spacer(modifier = Modifier.height(16.dp.scale(s)))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = Color.Transparent,
+                            contentColor = TextMuted,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = BackgroundDark
+                        ),
+                        modifier = Modifier
+                            .focusRequester(closeFocusRequester)
+                            .onFocusChanged { closeFocused = it.isFocused }
+                            .focusProperties {
+                                // 当前弹窗只有一个可聚焦按钮，方向键保持在窗口内
+                                up = closeFocusRequester
+                                down = closeFocusRequester
+                                left = closeFocusRequester
+                                right = closeFocusRequester
+                            }
+                    ) {
+                        Text(
+                            text = "知道了",
+                            color = if (closeFocused) BackgroundDark else TextMuted
+                        )
+                    }
+                }
             }
         }
     }
@@ -2176,45 +2348,64 @@ private fun MediaTypeSortDialog(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun ClassificationStrategyOptionRow(
     selected: MediaClassificationStrategy,
     strategy: MediaClassificationStrategy,
     title: String,
     description: String,
+    modifier: Modifier = Modifier,
+    up: FocusRequester? = null,
+    down: FocusRequester? = null,
+    left: FocusRequester? = null,
+    right: FocusRequester? = null,
     onSelect: (MediaClassificationStrategy) -> Unit
 ) {
     val isSel = selected == strategy
-    Button(
+    var isFocused by remember { mutableStateOf(false) }
+    Card(
         onClick = { onSelect(strategy) },
-        colors = ButtonDefaults.colors(
-            containerColor = if (isSel) PrimaryYellow.copy(alpha = 0.25f) else Color.Transparent,
-            contentColor = TextPrimary,
-            focusedContainerColor = PrimaryYellow.copy(alpha = 0.35f),
-            focusedContentColor = TextPrimary
+        colors = CardDefaults.colors(
+            // 非焦点时不使用整块黄底，避免“已选项”长期高亮干扰导航
+            containerColor = Color.Transparent,
+            contentColor = if (isSel) PrimaryYellow else TextPrimary,
+            focusedContainerColor = PrimaryYellow,
+            focusedContentColor = BackgroundDark
         ),
-        shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
-        modifier = Modifier
+        scale = CardDefaults.scale(
+            scale = 1.0f,
+            focusedScale = 1.02f,
+            pressedScale = 1.0f
+        ),
+        shape = CardDefaults.shape(shape = RoundedCornerShape(12.dp)),
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp)
+            .focusProperties {
+                this.up = up ?: FocusRequester.Cancel
+                this.down = down ?: FocusRequester.Cancel
+                this.left = left ?: FocusRequester.Cancel
+                this.right = right ?: FocusRequester.Cancel
+            }
+            .onFocusChanged { isFocused = it.isFocused }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp, horizontal = 4.dp),
+                .padding(top = 8.dp, bottom = 8.dp, start = 14.dp, end = 8.dp),
             horizontalAlignment = Alignment.Start
         ) {
             Text(
-                text = title,
+                text = if (isSel) "$title  · 当前" else title,
                 style = MaterialTheme.typography.titleMedium,
-                color = TextPrimary
+                color = if (isFocused) BackgroundDark else if (isSel) PrimaryYellow else TextPrimary
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
-                color = TextMuted
+                color = if (isFocused) BackgroundDark else TextMuted
             )
         }
     }
@@ -2235,7 +2426,11 @@ private fun ClassificationStrategyDialog(
     )
     var selected by remember(currentStrategy) { mutableStateOf(currentStrategy) }
     val coroutineScope = rememberCoroutineScope()
-    val focusRequester = remember { FocusRequester() }
+    val smartFocusRequester = remember { FocusRequester() }
+    val structureFocusRequester = remember { FocusRequester() }
+    val keywordFocusRequester = remember { FocusRequester() }
+    val cancelFocusRequester = remember { FocusRequester() }
+    val saveFocusRequester = remember { FocusRequester() }
 
     Box(
         modifier = Modifier
@@ -2288,9 +2483,22 @@ private fun ClassificationStrategyDialog(
 
                 ClassificationStrategyOptionRow(
                     selected = selected,
+                    strategy = MediaClassificationStrategy.SMART_BALANCED,
+                    title = "智能均衡（推荐）",
+                    description = "综合季集结构与类型关键词进行判定：既避免把电影误判成剧集，也减少综艺/纪录片误归类。",
+                    modifier = Modifier.focusRequester(smartFocusRequester),
+                    up = saveFocusRequester,
+                    down = structureFocusRequester,
+                    onSelect = { selected = it }
+                )
+                ClassificationStrategyOptionRow(
+                    selected = selected,
                     strategy = MediaClassificationStrategy.STRUCTURE_FIRST,
                     title = "结构优先",
                     description = "优先根据文件名中的季集（S01E01）、纯集数等结构判断，再参考「综艺、纪录片」等关键词。",
+                    modifier = Modifier.focusRequester(structureFocusRequester),
+                    up = smartFocusRequester,
+                    down = keywordFocusRequester,
                     onSelect = { selected = it }
                 )
                 ClassificationStrategyOptionRow(
@@ -2298,6 +2506,9 @@ private fun ClassificationStrategyDialog(
                     strategy = MediaClassificationStrategy.KEYWORD_FIRST,
                     title = "关键词优先",
                     description = "优先根据路径/文件名中的类型词（综艺、纪录片、动漫等）判断，再参考季集结构。适合按类型分文件夹整理的资源。",
+                    modifier = Modifier.focusRequester(keywordFocusRequester),
+                    up = structureFocusRequester,
+                    down = cancelFocusRequester,
                     onSelect = { selected = it }
                 )
 
@@ -2318,9 +2529,14 @@ private fun ClassificationStrategyDialog(
                         ),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
                         modifier = Modifier
-                            .focusRequester(focusRequester)
+                            .focusRequester(cancelFocusRequester)
                             .onFocusChanged { cancelFocused = it.isFocused }
-                            .focusProperties { left = FocusRequester.Cancel }
+                            .focusProperties {
+                                up = keywordFocusRequester
+                                down = smartFocusRequester
+                                left = saveFocusRequester
+                                right = saveFocusRequester
+                            }
                     ) {
                         Text(
                             text = "取消",
@@ -2344,7 +2560,15 @@ private fun ClassificationStrategyDialog(
                             focusedContentColor = BackgroundDark
                         ),
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(12.dp)),
-                        modifier = Modifier.onFocusChanged { saveFocused = it.isFocused }
+                        modifier = Modifier
+                            .focusRequester(saveFocusRequester)
+                            .onFocusChanged { saveFocused = it.isFocused }
+                            .focusProperties {
+                                up = keywordFocusRequester
+                                down = smartFocusRequester
+                                left = cancelFocusRequester
+                                right = cancelFocusRequester
+                            }
                     ) {
                         Text(
                             text = "保存",
@@ -2356,8 +2580,12 @@ private fun ClassificationStrategyDialog(
         }
     }
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    LaunchedEffect(currentStrategy) {
+        when (currentStrategy) {
+            MediaClassificationStrategy.SMART_BALANCED -> smartFocusRequester.requestFocus()
+            MediaClassificationStrategy.STRUCTURE_FIRST -> structureFocusRequester.requestFocus()
+            MediaClassificationStrategy.KEYWORD_FIRST -> keywordFocusRequester.requestFocus()
+        }
     }
 }
 
