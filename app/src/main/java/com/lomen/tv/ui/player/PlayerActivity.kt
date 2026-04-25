@@ -1,6 +1,7 @@
 package com.lomen.tv.ui.player
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -28,6 +29,8 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        installCrashProbe()
+
         window.setBackgroundDrawableResource(R.color.background_dark)
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -38,6 +41,11 @@ class PlayerActivity : ComponentActivity() {
         val mediaId = intent.getStringExtra(EXTRA_MEDIA_ID)
         val episodeId = intent.getStringExtra(EXTRA_EPISODE_ID)
         val startPosition = intent.getLongExtra(EXTRA_START_POSITION, 0L)
+        Log.i(
+            "PlayerCrashProbe",
+            "onCreate playback args: mediaId=$mediaId, episodeId=$episodeId, " +
+                "startPosition=$startPosition, videoUrl=${videoUrl.take(240)}"
+        )
 
         setContent {
             LomenTVTheme {
@@ -57,6 +65,25 @@ class PlayerActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    private fun installCrashProbe() {
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val safeIntent = intent
+            val mediaId = safeIntent?.getStringExtra(EXTRA_MEDIA_ID)
+            val episodeId = safeIntent?.getStringExtra(EXTRA_EPISODE_ID)
+            val startPosition = safeIntent?.getLongExtra(EXTRA_START_POSITION, 0L)
+            val videoUrl = safeIntent?.getStringExtra(EXTRA_VIDEO_URL)?.take(240)
+            Log.e(
+                "PlayerCrashProbe",
+                "Uncaught exception in PlayerActivity thread=${thread.name}, " +
+                    "mediaId=$mediaId, episodeId=$episodeId, startPosition=$startPosition, " +
+                    "videoUrl=$videoUrl",
+                throwable
+            )
+            previousHandler?.uncaughtException(thread, throwable)
         }
     }
 }

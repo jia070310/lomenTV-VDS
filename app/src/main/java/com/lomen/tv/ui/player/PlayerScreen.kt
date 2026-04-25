@@ -1,7 +1,12 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+
 package com.lomen.tv.ui.player
 
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,12 +15,15 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -48,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -56,15 +65,18 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -84,6 +96,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.lomen.tv.domain.service.PlayerState
 import com.lomen.tv.ui.theme.BackgroundDark
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.PrimaryYellow
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextPrimary
@@ -96,6 +109,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import android.view.MotionEvent
 
 private fun PlayerView.applyTransparentSubtitleStyle() {
     subtitleView?.apply {
@@ -116,11 +130,32 @@ private fun PlayerView.applyTransparentSubtitleStyle() {
 
 // 控制栏模式枚举
 enum class ControlsMode {
-    SEEK,  // 快进退模式：无焦点，按钮浅灰色锁定，只能左右快进退
+    SEEK_OVERLAY,  // 快进退反馈态：执行左右快进退，不锁定其它控件
     NAV    // 导航模式：有焦点，可操作按钮，不能快进退
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class, androidx.media3.common.util.UnstableApi::class)
+private enum class ControlFocusZone {
+    NONE,
+    TOP_BAR,
+    PROGRESS,
+    BOTTOM_BUTTONS
+}
+
+private const val CONTROLS_AUTO_HIDE_MS = 6000L
+private const val PROGRESS_BUBBLE_FOCUS_SCALE = 1.12f
+private const val PROGRESS_BUBBLE_IDLE_SCALE = 1.0f
+private val PROGRESS_BUBBLE_FOCUS_GLOW = 12.dp
+private val PROGRESS_BUBBLE_IDLE_GLOW = 0.dp
+private val PROGRESS_BAR_HEIGHT = 6.dp
+private val PROGRESS_BUBBLE_MIN_WIDTH = 88.dp
+private val PROGRESS_BUBBLE_MAX_WIDTH = 170.dp
+private const val FOCUS_ANIMATION_DURATION_MS = 170
+
+@OptIn(
+    ExperimentalTvMaterial3Api::class,
+    ExperimentalComposeUiApi::class,
+    androidx.media3.common.util.UnstableApi::class
+)
 @Composable
 fun PlayerScreen(
     videoUrl: String,
@@ -175,6 +210,7 @@ fun PlayerScreen(
     // 播放器设置
     val playerSettingsViewModel = androidx.hilt.navigation.compose.hiltViewModel<com.lomen.tv.ui.viewmodel.PlayerSettingsViewModel>()
     val autoSkipIntroOutro by playerSettingsViewModel.autoSkipIntroOutro.collectAsState(initial = true)
+    val seekDurationSeconds by playerSettingsViewModel.seekDurationSeconds.collectAsState(initial = 15)
     
     // 剧集列表和清晰度选项
     var episodeList by remember { mutableStateOf<List<PlayerViewModel.EpisodeListItem>>(emptyList()) }
@@ -214,6 +250,12 @@ fun PlayerScreen(
     val playPauseFocusRequester = remember { FocusRequester() }
     // 返回按钮焦点请求器
     val backButtonFocusRequester = remember { FocusRequester() }
+    // 进度条焦点请求器
+    val progressBarFocusRequester = remember { FocusRequester() }
+    var requestPlayPauseFocusToken by remember { mutableStateOf(0) }
+    var requestProgressFocusToken by remember { mutableStateOf(0) }
+    var navInitialFocusZone by remember { mutableStateOf(ControlFocusZone.BOTTOM_BUTTONS) }
+    var focusedControlZone by remember { mutableStateOf(ControlFocusZone.NONE) }
 
     // 设置媒体信息、跳过配置、选集列表（同一 Effect，避免与下方 getEpisodeList 竞态导致选集恒空）
     LaunchedEffect(mediaId, episodeId) {
@@ -293,12 +335,12 @@ fun PlayerScreen(
     // 自动隐藏控制栏：从用户停止操作开始计时
     LaunchedEffect(showControls, lastInteractionTime, showEpisodeListDialog) {
         if (showControls && !showEpisodeListDialog) {
-            // 等待5秒
-            delay(5000)
-            // 检查是否已经超过5秒没有操作
+            // 等待6秒
+            delay(CONTROLS_AUTO_HIDE_MS)
+            // 检查是否已经超过6秒没有操作
             val timeSinceLastInteraction = System.currentTimeMillis() - lastInteractionTime
-            if (timeSinceLastInteraction >= 5000 && !showEpisodeListDialog) {
-                // 超过5秒没有操作，隐藏控制栏
+            if (timeSinceLastInteraction >= CONTROLS_AUTO_HIDE_MS && !showEpisodeListDialog) {
+                // 超过6秒没有操作，隐藏控制栏
                 showControls = false
                 controlsMode = null
             }
@@ -306,17 +348,20 @@ fun PlayerScreen(
     }
     
     // 当控制栏显示时，根据模式处理焦点
-    LaunchedEffect(showControls, controlsMode) {
+    LaunchedEffect(showControls, controlsMode, requestPlayPauseFocusToken, requestProgressFocusToken) {
         if (showControls) {
             delay(100) // 等待UI渲染
             when (controlsMode) {
                 ControlsMode.NAV -> {
-                    // 导航模式：焦点聚焦到播放/暂停按钮
-                    playPauseFocusRequester.requestFocus()
+                    // 导航模式：按入口方向把焦点落到对应区域
+                    when (navInitialFocusZone) {
+                        ControlFocusZone.TOP_BAR,
+                        ControlFocusZone.PROGRESS -> progressBarFocusRequester.requestFocus()
+                        else -> playPauseFocusRequester.requestFocus()
+                    }
                 }
-                ControlsMode.SEEK -> {
-                    // 快进退模式：焦点保持在根容器，不聚焦到任何按钮
-                    focusRequester.requestFocus()
+                ControlsMode.SEEK_OVERLAY -> {
+                    // 快进退反馈态：不主动抢焦点，保留当前焦点
                 }
                 null -> {
                     // 默认情况
@@ -396,50 +441,60 @@ fun PlayerScreen(
                         KeyEvent.KEYCODE_ENTER -> {
                             showControls = true
                             controlsMode = ControlsMode.NAV
+                            navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                            requestPlayPauseFocusToken++
                             updateInteractionTime { lastInteractionTime = it }
                             viewModel.togglePlayPause()
                             true
                         }
-                        // 左键：快退模式
+                        // 左键：始终快退并呼出状态栏
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (controlsMode == ControlsMode.NAV) {
-                                // 导航模式下，左右键用于按钮间切换，不处理快进退
-                                false
-                            } else {
-                                // 快进退模式或无控制栏时，执行快退
-                                showControls = true
-                                controlsMode = ControlsMode.SEEK
+                            if (showControls &&
+                                (focusedControlZone == ControlFocusZone.TOP_BAR ||
+                                    focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS)
+                            ) {
+                                // 在按钮导航区时，交给系统做焦点左右移动
                                 updateInteractionTime { lastInteractionTime = it }
-                                viewModel.seekBackward()
-                                true
+                                return@onKeyEvent false
                             }
+                            showControls = true
+                            controlsMode = ControlsMode.SEEK_OVERLAY
+                            updateInteractionTime { lastInteractionTime = it }
+                            viewModel.seekBackward(seekDurationSeconds * 1000L)
+                            true
                         }
-                        // 右键：快进模式
+                        // 右键：始终快进并呼出状态栏
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (controlsMode == ControlsMode.NAV) {
-                                // 导航模式下，左右键用于按钮间切换，不处理快进退
-                                false
-                            } else {
-                                // 快进退模式或无控制栏时，执行快进
-                                showControls = true
-                                controlsMode = ControlsMode.SEEK
+                            if (showControls &&
+                                (focusedControlZone == ControlFocusZone.TOP_BAR ||
+                                    focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS)
+                            ) {
+                                // 在按钮导航区时，交给系统做焦点左右移动
                                 updateInteractionTime { lastInteractionTime = it }
-                                viewModel.seekForward()
-                                true
+                                return@onKeyEvent false
                             }
+                            showControls = true
+                            controlsMode = ControlsMode.SEEK_OVERLAY
+                            updateInteractionTime { lastInteractionTime = it }
+                            viewModel.seekForward(seekDurationSeconds * 1000L)
+                            true
                         }
                         // 上键：不作为呼出键
                         KeyEvent.KEYCODE_DPAD_UP -> {
                             if (!showControls) {
                                 // 控制栏隐藏时，上键无效（不作为呼出键）
                                 true
-                            } else if (controlsMode == ControlsMode.NAV) {
-                                // 导航模式下，返回false让系统处理焦点移动
+                            } else if (controlsMode == ControlsMode.SEEK_OVERLAY) {
+                                // 快进退反馈态下，上键切到可导航模式并聚焦进度条
+                                controlsMode = ControlsMode.NAV
+                                navInitialFocusZone = ControlFocusZone.PROGRESS
+                                requestProgressFocusToken++
+                                updateInteractionTime { lastInteractionTime = it }
+                                true
+                            } else {
+                                // 控制栏显示时，交给系统处理焦点上移
                                 updateInteractionTime { lastInteractionTime = it }
                                 false
-                            } else {
-                                // 快进退模式下，上键无效（被锁定）
-                                true
                             }
                         }
                         // 下键：呼出控制栏并进入导航模式，焦点聚焦到播放/暂停按钮
@@ -448,37 +503,56 @@ fun PlayerScreen(
                                 // 控制栏隐藏时，下键呼出控制栏并进入导航模式
                                 showControls = true
                                 controlsMode = ControlsMode.NAV
+                                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                                requestPlayPauseFocusToken++
                                 updateInteractionTime { lastInteractionTime = it }
                                 // 直接消费按键，焦点由 LaunchedEffect 主动请求到播放/暂停按钮
                                 true
-                            } else if (controlsMode == ControlsMode.NAV) {
-                                // 导航模式下，返回false让系统处理焦点移动（从返回按钮移到播放按钮）
+                            } else if (controlsMode == ControlsMode.SEEK_OVERLAY) {
+                                // 快进退反馈态下，下键切到可导航模式并聚焦底部按钮区
+                                controlsMode = ControlsMode.NAV
+                                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                                requestPlayPauseFocusToken++
+                                updateInteractionTime { lastInteractionTime = it }
+                                true
+                            } else {
+                                // 控制栏显示时，交给系统处理焦点下移
                                 updateInteractionTime { lastInteractionTime = it }
                                 false
-                            } else {
-                                // 快进退模式下，下键无效（被锁定）
-                                true
                             }
+                        }
+                        // 菜单键族（菜单/设置/信息）：呼出控制栏并聚焦播放按钮
+                        KeyEvent.KEYCODE_MENU,
+                        KeyEvent.KEYCODE_SETTINGS,
+                        KeyEvent.KEYCODE_INFO -> {
+                            showControls = true
+                            controlsMode = ControlsMode.NAV
+                            navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                            requestPlayPauseFocusToken++
+                            updateInteractionTime { lastInteractionTime = it }
+                            true
                         }
                         KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                             showControls = true
                             controlsMode = ControlsMode.NAV
+                            navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                            requestPlayPauseFocusToken++
                             updateInteractionTime { lastInteractionTime = it }
                             viewModel.togglePlayPause()
                             true
                         }
                         KeyEvent.KEYCODE_MEDIA_REWIND -> {
                             showControls = true
-                            controlsMode = ControlsMode.SEEK
+                            controlsMode = ControlsMode.SEEK_OVERLAY
                             updateInteractionTime { lastInteractionTime = it }
-                            viewModel.seekBackward(30000)
+                            viewModel.seekBackward(seekDurationSeconds * 1000L)
                             true
                         }
                         KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                             showControls = true
-                            controlsMode = ControlsMode.SEEK
+                            controlsMode = ControlsMode.SEEK_OVERLAY
                             updateInteractionTime { lastInteractionTime = it }
-                            viewModel.seekForward(30000)
+                            viewModel.seekForward(seekDurationSeconds * 1000L)
                             true
                         }
                         // 返回键：隐藏状态栏
@@ -501,6 +575,16 @@ fun PlayerScreen(
                 }
             }
     ) {
+        val revealControlsFromPointer: () -> Unit = {
+            if (!showEpisodeListDialog) {
+                showControls = true
+                controlsMode = ControlsMode.NAV
+                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                requestPlayPauseFocusToken++
+                updateInteractionTime { lastInteractionTime = it }
+            }
+        }
+
         // 视频播放器
         AndroidView(
             factory = { ctx ->
@@ -512,6 +596,29 @@ fun PlayerScreen(
                     applyTransparentSubtitleStyle()
                     // 设置播放器
                     player = viewModel.getPlayer()
+                    setOnClickListener {
+                        // 原生 View 点击链路，兼容模拟器鼠标左键点击
+                        revealControlsFromPointer()
+                    }
+                    setOnTouchListener { _, motionEvent ->
+                        if (motionEvent.action == MotionEvent.ACTION_UP) {
+                            revealControlsFromPointer()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    setOnGenericMotionListener { _, motionEvent ->
+                        val isPrimaryMousePress =
+                            motionEvent.action == MotionEvent.ACTION_BUTTON_PRESS &&
+                                (motionEvent.buttonState and MotionEvent.BUTTON_PRIMARY) != 0
+                        if (isPrimaryMousePress) {
+                            revealControlsFromPointer()
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     android.util.Log.d("PlayerScreen", "PlayerView created, player=${player}")
                 }
             },
@@ -537,7 +644,15 @@ fun PlayerScreen(
                 title = currentTitle ?: "",
                 episodeTitle = currentEpisodeTitle,
                 onBackPressed = onBackPressed,
-                backButtonFocusRequester = backButtonFocusRequester
+                backButtonFocusRequester = backButtonFocusRequester,
+                progressBarFocusRequester = progressBarFocusRequester,
+                onBackButtonFocusChanged = { isFocused ->
+                    if (isFocused) {
+                        focusedControlZone = ControlFocusZone.TOP_BAR
+                    } else if (focusedControlZone == ControlFocusZone.TOP_BAR) {
+                        focusedControlZone = ControlFocusZone.NONE
+                    }
+                }
             )
         }
 
@@ -549,7 +664,9 @@ fun PlayerScreen(
             ) {
                 IconButton(
                     onClick = { viewModel.play() },
-                    modifier = Modifier.size(80.dp)
+                    modifier = Modifier
+                        .size(80.dp)
+                        .mousePrimaryClick { viewModel.play() }
                 ) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
@@ -592,7 +709,24 @@ fun PlayerScreen(
                 onSkipNext = { viewModel.seekToNext() },
                 onUpdateInteractionTime = { lastInteractionTime = System.currentTimeMillis() },
                 playPauseFocusRequester = playPauseFocusRequester,
-                isLocked = controlsMode == ControlsMode.SEEK,
+                backButtonFocusRequester = backButtonFocusRequester,
+                progressBarFocusRequester = progressBarFocusRequester,
+                isLocked = false,
+                forceProgressBubbleHighlight = controlsMode == ControlsMode.SEEK_OVERLAY,
+                onProgressFocusChanged = { isFocused ->
+                    if (isFocused) {
+                        focusedControlZone = ControlFocusZone.PROGRESS
+                    } else if (focusedControlZone == ControlFocusZone.PROGRESS) {
+                        focusedControlZone = ControlFocusZone.NONE
+                    }
+                },
+                onBottomButtonFocusChanged = { isFocused ->
+                    if (isFocused) {
+                        focusedControlZone = ControlFocusZone.BOTTOM_BUTTONS
+                    } else if (focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS) {
+                        focusedControlZone = ControlFocusZone.NONE
+                    }
+                },
                 availableSubtitles = availableSubtitles,
                 availableAudioTracks = availableAudioTracks,
                 currentSpeed = currentSpeed.value,
@@ -671,6 +805,16 @@ fun PlayerScreen(
                 onDismiss = { showSubtitleDialog = false },
                 onSelect = { index ->
                     viewModel.selectSubtitle(index)
+                    val subtitleHint = if (index >= 0) {
+                        availableSubtitles.getOrNull(index)?.label ?: "字幕 ${index + 1}"
+                    } else {
+                        "关闭字幕"
+                    }
+                    android.widget.Toast.makeText(
+                        context,
+                        "已切换字幕：$subtitleHint",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                     showSubtitleDialog = false
                 }
             )
@@ -684,6 +828,12 @@ fun PlayerScreen(
                 onDismiss = { showAudioTrackDialog = false },
                 onSelect = { index ->
                     viewModel.selectAudioTrack(index)
+                    val selectedTrackLabel = availableAudioTracks.getOrNull(index)?.label ?: "音轨 ${index + 1}"
+                    android.widget.Toast.makeText(
+                        context,
+                        "已切换到：$selectedTrackLabel",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
                     showAudioTrackDialog = false
                 }
             )
@@ -868,6 +1018,7 @@ private fun ResumeOrRestartPromptContent(
                             up = FocusRequester.Cancel
                             down = FocusRequester.Cancel
                         }
+                        .mousePrimaryClick { onContinue() }
                         .onFocusChanged { continueFocused = it.isFocused }
                 ) {
                     Text(
@@ -891,6 +1042,7 @@ private fun ResumeOrRestartPromptContent(
                             up = FocusRequester.Cancel
                             down = FocusRequester.Cancel
                         }
+                        .mousePrimaryClick { onRestart() }
                         .onFocusChanged { restartFocused = it.isFocused }
                 ) {
                     Text(
@@ -914,6 +1066,7 @@ private fun ResumeOrRestartPromptContent(
                             up = FocusRequester.Cancel
                             down = FocusRequester.Cancel
                         }
+                        .mousePrimaryClick { onClose() }
                         .onFocusChanged { closeFocused = it.isFocused }
                 ) {
                     Text(
@@ -938,13 +1091,31 @@ private fun updateInteractionTime(setTime: (Long) -> Unit) {
     setTime(System.currentTimeMillis())
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
+private fun Modifier.mousePrimaryClick(
+    enabled: Boolean = true,
+    onClick: () -> Unit
+): Modifier = this.pointerInteropFilter { motionEvent ->
+    if (!enabled) return@pointerInteropFilter false
+    when (motionEvent.action) {
+        MotionEvent.ACTION_DOWN -> true
+        MotionEvent.ACTION_UP -> {
+            onClick()
+            true
+        }
+        else -> false
+    }
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun PlayerTopBar(
     title: String,
     episodeTitle: String?,
     onBackPressed: () -> Unit,
-    backButtonFocusRequester: FocusRequester
+    backButtonFocusRequester: FocusRequester,
+    progressBarFocusRequester: FocusRequester,
+    onBackButtonFocusChanged: (Boolean) -> Unit
 ) {
     // 获取当前时间
     var currentTime by remember { mutableStateOf("") }
@@ -989,7 +1160,14 @@ private fun PlayerTopBar(
                     modifier = Modifier
                         .size(40.dp)
                         .focusRequester(backButtonFocusRequester)
-                        .onFocusChanged { isBackFocused = it.isFocused }
+                        .focusProperties {
+                            down = progressBarFocusRequester
+                        }
+                        .mousePrimaryClick { onBackPressed() }
+                        .onFocusChanged {
+                            isBackFocused = it.isFocused
+                            onBackButtonFocusChanged(it.isFocused)
+                        }
                 ) {
                     Icon(
                         imageVector = Icons.Default.ArrowBack,
@@ -1049,7 +1227,7 @@ private fun PlayerTopBar(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun PlayerControls(
     playerState: PlayerState,
@@ -1061,7 +1239,12 @@ private fun PlayerControls(
     onSkipNext: () -> Unit,
     onUpdateInteractionTime: () -> Unit,
     playPauseFocusRequester: FocusRequester,
+    backButtonFocusRequester: FocusRequester,
+    progressBarFocusRequester: FocusRequester,
     isLocked: Boolean = false,
+    forceProgressBubbleHighlight: Boolean = false,
+    onProgressFocusChanged: (Boolean) -> Unit = {},
+    onBottomButtonFocusChanged: (Boolean) -> Unit = {},
     availableSubtitles: List<com.lomen.tv.domain.service.TrackInfo> = emptyList(),
     availableAudioTracks: List<com.lomen.tv.domain.service.TrackInfo> = emptyList(),
     currentSpeed: Float = 1.0f,
@@ -1097,35 +1280,62 @@ private fun PlayerControls(
         val progress = if (playerState.duration > 0) {
             playerState.currentPosition.toFloat() / playerState.duration.toFloat()
         } else 0f
+        val progressInteractionSource = remember { MutableInteractionSource() }
+        val isProgressFocused = progressInteractionSource.collectIsFocusedAsState().value
+        val bubbleHighlighted = isProgressFocused || forceProgressBubbleHighlight
+        val bubbleScale by animateFloatAsState(
+            targetValue = if (bubbleHighlighted) PROGRESS_BUBBLE_FOCUS_SCALE else PROGRESS_BUBBLE_IDLE_SCALE,
+            animationSpec = tween(durationMillis = FOCUS_ANIMATION_DURATION_MS),
+            label = "progressBubbleScale"
+        )
+        val bubbleGlow by animateDpAsState(
+            targetValue = if (bubbleHighlighted) PROGRESS_BUBBLE_FOCUS_GLOW else PROGRESS_BUBBLE_IDLE_GLOW,
+            animationSpec = tween(durationMillis = FOCUS_ANIMATION_DURATION_MS),
+            label = "progressBubbleGlow"
+        )
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 8.dp)
         ) {
-            // 时间提示气泡 - 显示在进度条上方，始终单行显示
-            val bubbleWidth = 100.dp // 固定气泡宽度
-            val progressWidth = progress * 100 // 进度百分比
-            
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.CenterStart
+            // 时间提示气泡 - 跟随播放进度并在两端做边界保护
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            var bubbleWidthDp by remember { mutableStateOf(PROGRESS_BUBBLE_MIN_WIDTH) }
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // 计算气泡位置，确保不超出边界
-                val bubbleOffset = (progress * 1000).dp.coerceIn(0.dp, 1000.dp)
-                
+                val safeProgress = progress.coerceIn(0f, 1f)
+                val effectiveBubbleWidth = bubbleWidthDp.coerceIn(PROGRESS_BUBBLE_MIN_WIDTH, PROGRESS_BUBBLE_MAX_WIDTH)
+                val maxBubbleX = (maxWidth - effectiveBubbleWidth).coerceAtLeast(0.dp)
+                val bubbleX = ((maxWidth * safeProgress) - (effectiveBubbleWidth / 2)).coerceIn(0.dp, maxBubbleX)
+
                 Box(
                     modifier = Modifier
                         .offset(
-                            x = ((progress * 1000).toInt()).dp.coerceIn(0.dp, (1000 - 100).dp),
+                            x = bubbleX,
                             y = (-8).dp
                         )
-                        .widthIn(min = 90.dp)
+                        .graphicsLayer {
+                            scaleX = bubbleScale
+                            scaleY = bubbleScale
+                        }
+                        .shadow(
+                            elevation = bubbleGlow,
+                            shape = RoundedCornerShape(6.dp),
+                            ambientColor = if (bubbleHighlighted) Color.White.copy(alpha = 0.95f) else PrimaryYellow.copy(alpha = 0.55f),
+                            spotColor = if (bubbleHighlighted) PrimaryYellow.copy(alpha = 0.98f) else PrimaryYellow.copy(alpha = 0.75f)
+                        )
+                        .widthIn(min = 0.dp, max = PROGRESS_BUBBLE_MAX_WIDTH)
+                        .onSizeChanged { size ->
+                            bubbleWidthDp = with(density) { size.width.toDp() }
+                        }
                         .background(
-                            color = PrimaryYellow,
+                            color = if (bubbleHighlighted) Color(0xFFFFF176) else PrimaryYellow,
                             shape = RoundedCornerShape(4.dp)
                         )
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "${formatDuration(playerState.currentPosition)} / ${formatDuration(playerState.duration)}",
@@ -1135,24 +1345,55 @@ private fun PlayerControls(
                         ),
                         color = Color.Black,
                         maxLines = 1,
-                        softWrap = false
+                        softWrap = false,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
         }
 
-        // 进度条
+        // 进度条（支持鼠标点击/拖动跳转）
+        var progressBarWidthPx by remember { mutableStateOf(0f) }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(6.dp)
+                .height(PROGRESS_BAR_HEIGHT)
+                .focusRequester(progressBarFocusRequester)
+                .focusProperties {
+                    up = backButtonFocusRequester
+                    down = playPauseFocusRequester
+                }
+                .focusable(interactionSource = progressInteractionSource)
+                .onFocusChanged {
+                    onProgressFocusChanged(it.hasFocus)
+                    if (it.hasFocus) onUpdateInteractionTime()
+                }
+                .onSizeChanged { size ->
+                    progressBarWidthPx = size.width.toFloat()
+                }
+                .pointerInteropFilter { motionEvent ->
+                    if (playerState.duration <= 0 || progressBarWidthPx <= 0f) {
+                        return@pointerInteropFilter false
+                    }
+                    when (motionEvent.action) {
+                        MotionEvent.ACTION_DOWN,
+                        MotionEvent.ACTION_MOVE,
+                        MotionEvent.ACTION_UP -> {
+                            val seekProgress = (motionEvent.x / progressBarWidthPx).coerceIn(0f, 1f)
+                            onSeekTo((playerState.duration * seekProgress).toLong())
+                            onUpdateInteractionTime()
+                            true
+                        }
+                        else -> false
+                    }
+                }
                 .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(3.dp))
         ) {
             // 已播放进度（黄色）
             Box(
                 modifier = Modifier
                     .fillMaxWidth(progress)
-                    .height(6.dp)
+                    .height(PROGRESS_BAR_HEIGHT)
                     .background(PrimaryYellow, RoundedCornerShape(3.dp))
             )
         }
@@ -1195,7 +1436,15 @@ private fun PlayerControls(
                         ),
                         modifier = Modifier
                             .size(36.dp)
-                            .onFocusChanged { isSkipPreviousFocused = it.isFocused }
+                            .focusProperties { canFocus = !isLocked }
+                            .mousePrimaryClick(enabled = !isLocked) {
+                                onSkipPrevious()
+                                onUpdateInteractionTime()
+                            }
+                            .onFocusChanged {
+                                isSkipPreviousFocused = it.isFocused
+                                onBottomButtonFocusChanged(it.isFocused)
+                            }
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipPrevious,
@@ -1226,7 +1475,18 @@ private fun PlayerControls(
                         modifier = Modifier
                             .size(48.dp)
                             .focusRequester(playPauseFocusRequester)
-                            .onFocusChanged { isPlayPauseFocused = it.isFocused }
+                            .focusProperties {
+                                canFocus = !isLocked
+                                up = progressBarFocusRequester
+                            }
+                            .mousePrimaryClick(enabled = !isLocked) {
+                                onPlayPause()
+                                onUpdateInteractionTime()
+                            }
+                            .onFocusChanged {
+                                isPlayPauseFocused = it.isFocused
+                                onBottomButtonFocusChanged(it.isFocused)
+                            }
                     ) {
                         Icon(
                             imageVector = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -1256,7 +1516,15 @@ private fun PlayerControls(
                         ),
                         modifier = Modifier
                             .size(36.dp)
-                            .onFocusChanged { isSkipNextFocused = it.isFocused }
+                            .focusProperties { canFocus = !isLocked }
+                            .mousePrimaryClick(enabled = !isLocked) {
+                                onSkipNext()
+                                onUpdateInteractionTime()
+                            }
+                            .onFocusChanged {
+                                isSkipNextFocused = it.isFocused
+                                onBottomButtonFocusChanged(it.isFocused)
+                            }
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipNext,
@@ -1310,7 +1578,8 @@ private fun PlayerControls(
                             onUpdateInteractionTime()
                         }
                     },
-                    isLocked = isLocked
+                    isLocked = isLocked,
+                    onFocusChanged = onBottomButtonFocusChanged
                 )
 
                 // 音轨按钮
@@ -1322,7 +1591,8 @@ private fun PlayerControls(
                             onUpdateInteractionTime()
                         }
                     },
-                    isLocked = isLocked
+                    isLocked = isLocked,
+                    onFocusChanged = onBottomButtonFocusChanged
                 )
 
                 // 倍速按钮
@@ -1334,7 +1604,8 @@ private fun PlayerControls(
                             onUpdateInteractionTime()
                         }
                     },
-                    isLocked = isLocked
+                    isLocked = isLocked,
+                    onFocusChanged = onBottomButtonFocusChanged
                 )
 
                 ControlPillButton(
@@ -1345,7 +1616,8 @@ private fun PlayerControls(
                             onUpdateInteractionTime()
                         }
                     },
-                    isLocked = isLocked || !hasEpisodes
+                    isLocked = isLocked || !hasEpisodes,
+                    onFocusChanged = onBottomButtonFocusChanged
                 )
 
                 // 清晰度按钮（原蓝光按钮）
@@ -1358,7 +1630,8 @@ private fun PlayerControls(
                         }
                     },
                     isHighlighted = false,
-                    isLocked = isLocked
+                    isLocked = isLocked,
+                    onFocusChanged = onBottomButtonFocusChanged
                 )
 
                 // 跳过片头片尾按钮
@@ -1370,7 +1643,8 @@ private fun PlayerControls(
                             onUpdateInteractionTime()
                         }
                     },
-                    isLocked = isLocked
+                    isLocked = isLocked,
+                    onFocusChanged = onBottomButtonFocusChanged
                 )
             }
         }
@@ -1419,7 +1693,8 @@ private fun EpisodeListPanel(
         modifier = modifier
             .width(420.dp)
             .height(540.dp)
-            .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+            .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
             .padding(24.dp)
             .onPreviewKeyEvent { keyEvent ->
                 markInteraction()
@@ -1496,6 +1771,10 @@ private fun EpisodeListPanel(
                                 else -> false
                             }
                         }
+                        .mousePrimaryClick {
+                            markInteraction()
+                            onSelectEpisode(episode)
+                        }
                         .onFocusChanged {
                             isFocused = it.isFocused
                             if (it.isFocused) markInteraction()
@@ -1536,6 +1815,7 @@ private fun ControlPillButton(
     onClick: () -> Unit,
     isHighlighted: Boolean = false,
     isLocked: Boolean = false,
+    onFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -1553,7 +1833,13 @@ private fun ControlPillButton(
             disabledContentColor = Color.White.copy(alpha = 0.3f)
         ),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        modifier = modifier.onFocusChanged { isFocused = it.isFocused }
+        modifier = modifier
+            .onFocusChanged {
+                isFocused = it.isFocused
+                onFocusChanged(it.isFocused)
+            }
+            .focusProperties { canFocus = !isLocked }
+            .mousePrimaryClick(enabled = !isLocked) { onClick() }
     ) {
         Text(
             text = text,
@@ -1603,7 +1889,8 @@ private fun SubtitleSelectionDialog(
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .padding(24.dp)
         ) {
             Text(
@@ -1629,6 +1916,7 @@ private fun SubtitleSelectionDialog(
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
                             .focusRequester(focusRequesters[index])
+                            .mousePrimaryClick { onSelect(index) }
                             .onFocusChanged { isFocused = it.isFocused },
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceDark,
@@ -1671,7 +1959,8 @@ private fun AudioTrackSelectionDialog(
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .padding(24.dp)
         ) {
             Text(
@@ -1697,6 +1986,7 @@ private fun AudioTrackSelectionDialog(
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
                             .focusRequester(focusRequesters[index])
+                            .mousePrimaryClick { onSelect(index) }
                             .onFocusChanged { isFocused = it.isFocused },
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceDark,
@@ -1739,7 +2029,8 @@ private fun SpeedSelectionDialog(
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .padding(24.dp)
         ) {
             Text(
@@ -1758,6 +2049,7 @@ private fun SpeedSelectionDialog(
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .focusRequester(focusRequesters[index])
+                        .mousePrimaryClick { onSelect(speed) }
                         .onFocusChanged { isFocused = it.isFocused },
                     colors = ButtonDefaults.colors(
                         containerColor = SurfaceDark,
@@ -1799,7 +2091,8 @@ private fun QualitySelectionDialog(
         Column(
             modifier = Modifier
                 .width(400.dp)
-                .background(Color(0xFF1A1A1A).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .padding(24.dp)
         ) {
             Text(
@@ -1825,6 +2118,7 @@ private fun QualitySelectionDialog(
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
                             .focusRequester(focusRequesters[index])
+                            .mousePrimaryClick { onSelect(quality) }
                             .onFocusChanged { isFocused = it.isFocused },
                         colors = ButtonDefaults.colors(
                             containerColor = SurfaceDark,
@@ -1917,7 +2211,8 @@ private fun ErrorDialog(
                         onClick = onRetry,
                         modifier = Modifier
                             .width(120.dp)
-                            .focusRequester(retryFocusRequester),
+                            .focusRequester(retryFocusRequester)
+                            .mousePrimaryClick { onRetry() },
                         colors = ButtonDefaults.colors(
                             containerColor = PrimaryYellow,
                             contentColor = Color.Black,
@@ -1938,7 +2233,8 @@ private fun ErrorDialog(
                         onClick = onDismiss,
                         modifier = Modifier
                             .width(120.dp)
-                            .focusRequester(focusRequester),
+                            .focusRequester(focusRequester)
+                            .mousePrimaryClick { onDismiss() },
                         colors = ButtonDefaults.colors(
                             containerColor = Color.Gray.copy(alpha = 0.3f),
                             contentColor = Color.White,

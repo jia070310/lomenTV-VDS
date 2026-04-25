@@ -51,6 +51,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.lomen.tv.data.local.database.entity.SkipConfigEntity
 import com.lomen.tv.ui.theme.PrimaryYellow
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
@@ -104,13 +105,13 @@ fun SkipConfigDialog(
                 .width(405.dp)
                 .height(360.dp)
                 .background(
-                    color = Color(0xFF1A1A1A).copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(12.dp)
+                    color = DialogUiTokens.ContainerColor,
+                    shape = RoundedCornerShape(DialogUiTokens.CornerRadius)
                 )
                 .border(
-                    width = 1.dp,
-                    color = Color.White.copy(alpha = 0.1f),
-                    shape = RoundedCornerShape(12.dp)
+                    width = DialogUiTokens.BorderWidth,
+                    color = DialogUiTokens.BorderColor,
+                    shape = RoundedCornerShape(DialogUiTokens.CornerRadius)
                 )
                 // 焦点陷阱：阻止焦点逃出窗口
                 .focusProperties {

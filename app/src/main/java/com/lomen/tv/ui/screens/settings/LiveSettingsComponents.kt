@@ -4,6 +4,7 @@ package com.lomen.tv.ui.screens.settings
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -95,6 +96,7 @@ import androidx.tv.material3.Switch
 import androidx.tv.material3.SwitchDefaults
 import androidx.tv.material3.Text
 import com.lomen.tv.ui.theme.BackgroundDark
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.PrimaryYellow
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
@@ -182,12 +184,13 @@ fun QrCodeDialog(
                 Card(
                     onClick = {},
                     colors = CardDefaults.colors(
-                        containerColor = SurfaceDark,
-                        focusedContainerColor = SurfaceDark
+                        containerColor = DialogUiTokens.ContainerColor,
+                        focusedContainerColor = DialogUiTokens.ContainerColor
                     ),
                     modifier = modifier
                         .width(DialogDimens.QrCardWidth)
                         .height(DialogDimens.QrCardHeight)
+                        .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                         .onPreviewKeyEvent { keyEvent ->
                             // 拦截所有方向键，防止光标移出窗口
                             if (keyEvent.key == Key.DirectionUp ||
@@ -382,12 +385,13 @@ fun LiveWebConfigSuccessHintDialog(
             Card(
                 onClick = {},
                 colors = CardDefaults.colors(
-                    containerColor = SurfaceDark,
-                    focusedContainerColor = SurfaceDark
+                    containerColor = DialogUiTokens.ContainerColor,
+                    focusedContainerColor = DialogUiTokens.ContainerColor
                 ),
                 modifier = Modifier
                     .widthIn(min = DialogDimens.SuccessHintWidthMin, max = DialogDimens.SuccessHintWidthMax)
                     .padding(12.dp)
+                    .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                     .focusProperties {
                         canFocus = true
                     }
@@ -505,7 +509,7 @@ fun <T> HistoryListDialog(
                     onDismissRequest()
                 }
             },
-            containerColor = Color(0xFF2a2a2a),
+            containerColor = DialogUiTokens.ContainerColor,
             confirmButton = {
                 Box(
                     modifier = Modifier
@@ -673,7 +677,7 @@ fun <T> HistoryListDialog(
                 showDeleteConfirm = false
                 itemToDelete = null
             },
-            containerColor = Color(0xFF2a2a2a),
+            containerColor = DialogUiTokens.ContainerColor,
             title = {
                 Text(
                     text = "确认删除",
@@ -742,7 +746,7 @@ fun <T> HistoryListDialog(
                 dismissOnClickOutside = false
             ),
             onDismissRequest = { showBuiltInTip = false },
-            containerColor = Color(0xFF2a2a2a),
+            containerColor = DialogUiTokens.ContainerColor,
             title = {
                 Text(
                     text = "提示",

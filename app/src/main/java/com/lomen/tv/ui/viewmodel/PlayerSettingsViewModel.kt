@@ -42,4 +42,19 @@ class PlayerSettingsViewModel @Inject constructor(
             playerSettingsPreferences.setRememberPlaybackPosition(enabled)
         }
     }
+
+    /**
+     * 快进快退时长（秒）
+     */
+    val seekDurationSeconds: Flow<Int> = playerSettingsPreferences.seekDurationSeconds
+
+    /**
+     * 设置快进快退时长（秒）
+     */
+    fun setSeekDurationSeconds(seconds: Int) {
+        android.util.Log.d("PlayerSettingsViewModel", "Setting seek duration seconds to: $seconds")
+        viewModelScope.launch {
+            playerSettingsPreferences.setSeekDurationSeconds(seconds)
+        }
+    }
 }

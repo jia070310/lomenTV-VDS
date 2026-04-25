@@ -503,22 +503,36 @@ class DetailViewModel @Inject constructor(
                     startPosition = start
                 )
             }
-            
-            // 查找有观看历史的剧集中最新的一集
-            var latestHistory: WatchHistoryEntity? = null
+
+            // 1) 优先使用“该剧集（series）”维度的最新记录（movieId=mediaId）
+            val latestSeriesHistory = watchHistoryDao.getLatestWatchHistoryByMovieId(mediaId)
+            val targetFromSeriesHistory = latestSeriesHistory
+                ?.episodeId
+                ?.let { watchedEpisodeId -> allEpisodes.find { it.id == watchedEpisodeId } }
+
+            if (latestSeriesHistory != null && targetFromSeriesHistory != null) {
+                return ResumePlaybackInfo(
+                    videoUrl = targetFromSeriesHistory.path ?: "",
+                    title = media.title,
+                    episodeTitle = "第${targetFromSeriesHistory.episodeNumber}集 ${targetFromSeriesHistory.title ?: ""}",
+                    mediaId = mediaId,
+                    episodeId = targetFromSeriesHistory.id,
+                    startPosition = latestSeriesHistory.progress
+                )
+            }
+
+            // 2) 兼容旧历史格式：在每集历史中找该剧的最后一次记录
+            var latestLegacyHistory: WatchHistoryEntity? = null
             var targetEpisode: EpisodeItem? = null
-            
             for (episode in allEpisodes) {
-                val history = resolveEpisodeWatchHistory(mediaId, episode.id)
-                if (history != null) {
-                    if (latestHistory == null || history.lastWatchedAt > latestHistory.lastWatchedAt) {
-                        latestHistory = history
-                        targetEpisode = episode
-                    }
+                val history = resolveEpisodeWatchHistory(mediaId, episode.id) ?: continue
+                if (latestLegacyHistory == null || history.lastWatchedAt > latestLegacyHistory.lastWatchedAt) {
+                    latestLegacyHistory = history
+                    targetEpisode = episode
                 }
             }
-            
-            return if (targetEpisode != null && latestHistory != null) {
+
+            return if (targetEpisode != null && latestLegacyHistory != null) {
                 // 找到了有观看历史的剧集，继续观看
                 ResumePlaybackInfo(
                     videoUrl = targetEpisode.path ?: "",
@@ -526,11 +540,13 @@ class DetailViewModel @Inject constructor(
                     episodeTitle = "第${targetEpisode.episodeNumber}集 ${targetEpisode.title ?: ""}",
                     mediaId = mediaId,
                     episodeId = targetEpisode.id,
-                    startPosition = latestHistory.progress
+                    startPosition = latestLegacyHistory.progress
                 )
             } else {
                 // 没有任何观看历史，播放第一集
-                val firstEpisode = allEpisodes.minByOrNull { it.episodeNumber }
+                val firstEpisode = allEpisodes.minWithOrNull(
+                    compareBy<EpisodeItem>({ it.seasonNumber }, { it.episodeNumber })
+                )
                 if (firstEpisode != null) {
                     ResumePlaybackInfo(
                         videoUrl = firstEpisode.path ?: "",

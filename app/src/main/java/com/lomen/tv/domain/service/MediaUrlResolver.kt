@@ -16,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -110,7 +111,7 @@ class MediaUrlResolver @Inject constructor(
         // 先尝试检测是否是OpenList/AList
         val isOpenList = isOpenListOrAList(baseUrl, library)
         
-        return if (isOpenList) {
+        val playbackResult = if (isOpenList) {
             Log.d(TAG, "Detected OpenList/AList server")
             resolveOpenListUrl(fullUrl, library, videoPath)
         } else {
@@ -118,6 +119,19 @@ class MediaUrlResolver @Inject constructor(
             Log.d(TAG, "Using standard WebDAV")
             resolveWebDavUrl(fullUrl, library)
         }
+
+        if (playbackResult.isFailure) return playbackResult
+
+        val basePlayback = playbackResult.getOrNull() ?: return playbackResult
+        val externalSubtitles = findSubtitles(videoPath, library)
+        if (externalSubtitles.isNotEmpty()) {
+            Log.d(TAG, "Found ${externalSubtitles.size} external subtitles for $videoPath")
+        }
+        return Result.success(
+            basePlayback.copy(
+                subtitles = externalSubtitles
+            )
+        )
     }
     
 
@@ -395,26 +409,78 @@ class MediaUrlResolver @Inject constructor(
     /**
      * 搜索同目录下的字幕文件
      */
-    suspend fun findSubtitles(videoPath: String): List<SubtitleInfo> = withContext(Dispatchers.IO) {
+    private suspend fun findSubtitles(videoPath: String, library: ResourceLibrary): List<SubtitleInfo> = withContext(Dispatchers.IO) {
         val subtitles = mutableListOf<SubtitleInfo>()
         
         try {
-            // 获取视频文件名（不含扩展名）
-            val videoFileName = videoPath.substringAfterLast("/").substringBeforeLast(".")
-            val videoDir = videoPath.substringBeforeLast("/")
-            
-            // 常见字幕扩展名
-            val subtitleExtensions = listOf(".srt", ".ass", ".ssa", ".vtt", ".sub")
-            val languages = listOf("", ".zh", ".chi", ".chs", ".cht", ".en", ".eng")
-            
-            // TODO: 实际应该扫描目录查找字幕文件
-            // 这里先返回空列表，后续可以调用WebDAV API扫描
-            
+            val relativeVideoPath = videoPath
+                .removePrefix(library.name)
+                .removePrefix("/")
+                .trim('/')
+            if (relativeVideoPath.isBlank() || !relativeVideoPath.contains("/")) {
+                return@withContext subtitles
+            }
+
+            val videoDir = relativeVideoPath.substringBeforeLast("/")
+            val client = com.lomen.tv.data.webdav.WebDavClient(library)
+            val filesResult = client.listFiles(videoDir)
+            if (filesResult.isFailure) {
+                Log.w(TAG, "findSubtitles listFiles failed: ${filesResult.exceptionOrNull()?.message}")
+                return@withContext subtitles
+            }
+
+            val subtitleFiles = filesResult.getOrNull().orEmpty()
+                .filter { !it.isDirectory && isSubtitleFile(it.name) }
+                .sortedBy { it.name.lowercase(Locale.ROOT) }
+
+            subtitleFiles.forEachIndexed { idx, file ->
+                val subtitleUrl = client.getFileUrl(file.path)
+                val cleanName = file.name.substringBeforeLast('.')
+                val normalizedLabel = cleanName.ifBlank { "外挂字幕 ${idx + 1}" }
+                subtitles.add(
+                    SubtitleInfo(
+                        url = subtitleUrl,
+                        language = detectSubtitleLanguage(file.name),
+                        label = "[外挂] $normalizedLabel",
+                        mimeType = subtitleMimeType(file.name)
+                    )
+                )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to find subtitles", e)
         }
         
         subtitles
+    }
+
+    private fun isSubtitleFile(name: String): Boolean {
+        val lower = name.lowercase(Locale.ROOT)
+        return lower.endsWith(".srt") ||
+            lower.endsWith(".ass") ||
+            lower.endsWith(".ssa") ||
+            lower.endsWith(".vtt") ||
+            lower.endsWith(".sub")
+    }
+
+    private fun subtitleMimeType(name: String): String {
+        val lower = name.lowercase(Locale.ROOT)
+        return when {
+            lower.endsWith(".ass") || lower.endsWith(".ssa") -> "text/x-ssa"
+            lower.endsWith(".vtt") -> "text/vtt"
+            lower.endsWith(".sub") -> "application/octet-stream"
+            else -> "application/x-subrip"
+        }
+    }
+
+    private fun detectSubtitleLanguage(name: String): String {
+        val lower = name.lowercase(Locale.ROOT)
+        return when {
+            lower.contains("chs") || lower.contains("简中") || lower.contains("简体") -> "zh"
+            lower.contains("cht") || lower.contains("繁中") || lower.contains("繁体") -> "zh-TW"
+            lower.contains("zh") || lower.contains("chi") || lower.contains("中文") -> "zh"
+            lower.contains("eng") || lower.contains("english") || lower.contains("en") -> "en"
+            else -> "unknown"
+        }
     }
 }
 

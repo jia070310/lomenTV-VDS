@@ -100,6 +100,7 @@ import androidx.tv.material3.Switch
 import androidx.tv.material3.SwitchDefaults
 import androidx.tv.material3.Text
 import com.lomen.tv.ui.theme.BackgroundDark
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.GlassBackground
 import androidx.compose.ui.graphics.Brush
 import com.lomen.tv.ui.theme.PrimaryYellow
@@ -876,6 +877,7 @@ private fun HomeSettingsSection(
         initial = com.lomen.tv.data.preferences.LibraryScanPreferences.DEFAULT_SCAN_CONCURRENCY
     )
     val coroutineScope = rememberCoroutineScope()
+    var showScanConcurrencyDialog by remember { mutableStateOf(false) }
     val s = LocalCompactUiScale.current
     val gap = 16.dp.scale(s)
     val scanConcurrencyLabel = when (scanConcurrency) {
@@ -966,15 +968,8 @@ private fun HomeSettingsSection(
             iconBackgroundColor = Color.White.copy(alpha = 0.4f),
             iconTint = Color(0xFF22c55e),
             title = "资源扫描并发",
-            subtitle = "当前：$scanConcurrencyLabel（$scanConcurrency 线程，点击循环切换）",
-            onClick = {
-                val levels = com.lomen.tv.data.preferences.LibraryScanPreferences.AVAILABLE_CONCURRENCY_LEVELS
-                val currentIndex = levels.indexOf(scanConcurrency)
-                val nextIndex = if (currentIndex == -1 || currentIndex == levels.lastIndex) 0 else currentIndex + 1
-                coroutineScope.launch {
-                    scanPrefs.setScanConcurrency(levels[nextIndex])
-                }
-            },
+            subtitle = "当前：$scanConcurrencyLabel（$scanConcurrency 线程）",
+            onClick = { showScanConcurrencyDialog = true },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -1003,6 +998,94 @@ private fun HomeSettingsSection(
             onClick = onShowClearTmdbApiDialog,
             modifier = Modifier.fillMaxWidth()
         )
+
+        if (showScanConcurrencyDialog) {
+            ScanConcurrencySelectDialog(
+                options = com.lomen.tv.data.preferences.LibraryScanPreferences.AVAILABLE_CONCURRENCY_LEVELS,
+                selectedConcurrency = scanConcurrency,
+                getOptionLabel = { value ->
+                    when (value) {
+                        6 -> "低（更稳，适合弱网络）"
+                        14 -> "高（更快，适合高性能服务器）"
+                        else -> "中（推荐）"
+                    }
+                },
+                onSelect = { selected ->
+                    coroutineScope.launch {
+                        scanPrefs.setScanConcurrency(selected)
+                    }
+                    showScanConcurrencyDialog = false
+                },
+                onDismiss = { showScanConcurrencyDialog = false }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ScanConcurrencySelectDialog(
+    options: List<Int>,
+    selectedConcurrency: Int,
+    getOptionLabel: (Int) -> String,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val itemFocusRequesters = remember(options) { List(options.size) { FocusRequester() } }
+    val selectedIndex = options.indexOf(selectedConcurrency).let { if (it >= 0) it else 0 }
+    LaunchedEffect(options, selectedConcurrency) {
+        if (options.isNotEmpty()) {
+            delay(100)
+            itemFocusRequesters[selectedIndex].requestFocus()
+        }
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(520.dp)
+                .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .padding(horizontal = 18.dp, vertical = 16.dp)
+        ) {
+            Text(
+                text = "资源扫描并发",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            options.forEachIndexed { index, concurrency ->
+                val isSelected = concurrency == selectedConcurrency
+                var isFocused by remember(concurrency) { mutableStateOf(false) }
+
+                Button(
+                    onClick = { onSelect(concurrency) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp)
+                        .focusRequester(itemFocusRequesters[index])
+                        .onFocusChanged { isFocused = it.isFocused },
+                    scale = ButtonDefaults.scale(
+                        scale = 1.0f,
+                        focusedScale = 1.02f,
+                        pressedScale = 1.0f
+                    ),
+                    colors = ButtonDefaults.colors(
+                        containerColor = if (isSelected) PrimaryYellow.copy(alpha = 0.25f) else SurfaceDark,
+                        focusedContainerColor = PrimaryYellow,
+                        contentColor = TextPrimary,
+                        focusedContentColor = Color.Black
+                    )
+                ) {
+                    Text(
+                        text = "${getOptionLabel(concurrency)}（${concurrency}线程）",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isFocused) Color.Black else if (isSelected) PrimaryYellow else TextPrimary
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1015,16 +1098,20 @@ private fun PlaybackSettingsSection(
     val playerSettingsPreferences = androidx.hilt.navigation.compose.hiltViewModel<com.lomen.tv.ui.viewmodel.PlayerSettingsViewModel>()
     val autoSkipEnabled by playerSettingsPreferences.autoSkipIntroOutro.collectAsState(initial = true)
     val rememberPlaybackEnabled by playerSettingsPreferences.rememberPlaybackPosition.collectAsState(initial = true)
+    val seekDurationSeconds by playerSettingsPreferences.seekDurationSeconds.collectAsState(initial = 15)
     val coroutineScope = rememberCoroutineScope()
+    var showSeekDurationDialog by remember { mutableStateOf(false) }
+    val seekOptions = remember { listOf(15, 20, 25, 30, 35) }
     
     Column {
         // 快进快退时长
         SettingListItem(
             title = "快进快退时长",
             subtitle = "设置遥控器左右键跳转的秒数",
+            onClick = { showSeekDurationDialog = true },
             trailing = { itemFocused ->
                 Text(
-                    text = "15s",
+                    text = "${seekDurationSeconds}s",
                     style = MaterialTheme.typography.bodyLarge,
                     color = if (itemFocused) Color.Black else PrimaryYellow,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
@@ -1139,6 +1226,86 @@ private fun PlaybackSettingsSection(
             onClick = onShowClearWatchHistoryDialog,
             modifier = Modifier.fillMaxWidth()
         )
+
+        if (showSeekDurationDialog) {
+            SeekDurationSelectDialog(
+                options = seekOptions,
+                selectedSeconds = seekDurationSeconds,
+                onSelect = { seconds ->
+                    coroutineScope.launch {
+                        playerSettingsPreferences.setSeekDurationSeconds(seconds)
+                    }
+                    showSeekDurationDialog = false
+                },
+                onDismiss = { showSeekDurationDialog = false }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun SeekDurationSelectDialog(
+    options: List<Int>,
+    selectedSeconds: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val itemFocusRequesters = remember(options) { List(options.size) { FocusRequester() } }
+    val selectedIndex = options.indexOf(selectedSeconds).let { if (it >= 0) it else 0 }
+    LaunchedEffect(options, selectedSeconds) {
+        if (options.isNotEmpty()) {
+            delay(100)
+            itemFocusRequesters[selectedIndex].requestFocus()
+        }
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(360.dp)
+                .background(DialogUiTokens.ContainerColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .padding(horizontal = 18.dp, vertical = 16.dp)
+        ) {
+            Text(
+                text = "快进快退时长",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            options.forEachIndexed { index, seconds ->
+                val isSelected = seconds == selectedSeconds
+                var isFocused by remember(seconds) { mutableStateOf(false) }
+
+                Button(
+                    onClick = { onSelect(seconds) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp)
+                        .focusRequester(itemFocusRequesters[index])
+                        .onFocusChanged { isFocused = it.isFocused },
+                    scale = ButtonDefaults.scale(
+                        scale = 1.0f,
+                        focusedScale = 1.02f,
+                        pressedScale = 1.0f
+                    ),
+                    colors = ButtonDefaults.colors(
+                        containerColor = if (isSelected) PrimaryYellow.copy(alpha = 0.25f) else SurfaceDark,
+                        focusedContainerColor = PrimaryYellow,
+                        contentColor = TextPrimary,
+                        focusedContentColor = Color.Black
+                    )
+                ) {
+                    Text(
+                        text = "${seconds}s",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isFocused) Color.Black else if (isSelected) PrimaryYellow else TextPrimary
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1306,13 +1473,14 @@ private fun ScrapeRuleDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(900.dp.scale(s))
                 .height(620.dp.scale(s))
                 .padding(24.dp.scale(s))
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties {
                     // 弹窗打开后禁止焦点跳出弹窗
                     exit = { FocusRequester.Cancel }
@@ -1852,12 +2020,13 @@ private fun ConfirmDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties {
                     // 禁止焦点向外移动，实现焦点陷阱
                     canFocus = true
@@ -1984,12 +2153,13 @@ private fun ClearTmdbApiDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties {
                     canFocus = true
                     // 焦点陷阱：防止焦点从该对话框“跑出去”
@@ -2139,13 +2309,14 @@ private fun MediaTypeSortDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(DialogDimens.CardWidthSort)
                 .height(DialogDimens.CardHeightSort)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties {
                     // 禁止焦点向外移动，实现焦点陷阱
                     canFocus = true
@@ -2454,13 +2625,14 @@ private fun ClassificationStrategyDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(DialogDimens.CardWidthClassification)
                 .height(DialogDimens.CardHeightClassification)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties { canFocus = true }
         ) {
             Column(
@@ -3129,10 +3301,11 @@ private fun LiveSourceSettingsDialog(
     ) {
         Card(
             onClick = {},
-            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            colors = CardDefaults.colors(containerColor = DialogUiTokens.ContainerColor),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
         ) {
             Column(
                 modifier = Modifier.padding(DialogDimens.CardPaddingInner)
@@ -3230,10 +3403,11 @@ private fun EpgUrlSettingsDialog(
     ) {
         Card(
             onClick = {},
-            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            colors = CardDefaults.colors(containerColor = DialogUiTokens.ContainerColor),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
         ) {
             Column(
                 modifier = Modifier.padding(DialogDimens.CardPaddingInner)
@@ -3331,10 +3505,11 @@ private fun UserAgentSettingsDialog(
     ) {
         Card(
             onClick = {},
-            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            colors = CardDefaults.colors(containerColor = DialogUiTokens.ContainerColor),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
         ) {
             Column(
                 modifier = Modifier.padding(DialogDimens.CardPaddingInner)
@@ -3429,10 +3604,11 @@ private fun WebConfigInfoDialog(
     ) {
         Card(
             onClick = {},
-            colors = CardDefaults.colors(containerColor = SurfaceDark),
+            colors = CardDefaults.colors(containerColor = DialogUiTokens.ContainerColor),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
         ) {
             Column(
                 modifier = Modifier.padding(DialogDimens.CardPaddingInner)

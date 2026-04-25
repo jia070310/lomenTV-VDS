@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,7 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -49,6 +50,7 @@ import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.lomen.tv.ui.theme.PrimaryYellow
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
@@ -119,12 +121,13 @@ fun TmdbApiSettingsDialog(
             Card(
                 onClick = {},
                 colors = CardDefaults.colors(
-                    containerColor = SurfaceDark,
-                    focusedContainerColor = SurfaceDark
+                    containerColor = DialogUiTokens.ContainerColor,
+                    focusedContainerColor = DialogUiTokens.ContainerColor
                 ),
                 modifier = Modifier
                     .width(DialogDimens.QrCardWidth)
                     .height(DialogDimens.QrCardHeight)
+                    .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                     .onPreviewKeyEvent { keyEvent ->
                         // 拦截所有按键事件，防止光标移出窗口
                         when (keyEvent.key) {

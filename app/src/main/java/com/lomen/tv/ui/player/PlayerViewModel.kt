@@ -224,12 +224,25 @@ class PlayerViewModel @Inject constructor(
             try {
                 _isLoadingMedia.value = true
                 _loadError.value = null
+
+                android.util.Log.i(
+                    "PlayerCrashProbe",
+                    "prepareMedia start: mediaId=$currentMediaId, episodeId=$currentEpisodeId, " +
+                        "startPosition=$startPosition, title=$title, episodeTitle=$episodeTitle, " +
+                        "videoPath=${videoPath.take(300)}"
+                )
                 
                 // 解析真实播放URL
                 val result = mediaUrlResolver.resolvePlaybackUrl(videoPath)
                 
                 if (result.isSuccess) {
                     val playbackInfo = result.getOrNull()!!
+                    val headerKeys = playbackInfo.headers.keys.joinToString(",")
+                    android.util.Log.i(
+                        "PlayerCrashProbe",
+                        "prepareMedia resolved: url=${playbackInfo.url.take(300)}, " +
+                            "headers=[$headerKeys], subtitleCount=${playbackInfo.subtitles.size}"
+                    )
                     
                     android.util.Log.d("PlayerViewModel", "Preparing media with startPosition=$startPosition ms")
                     
@@ -379,10 +392,23 @@ class PlayerViewModel @Inject constructor(
                     
                     _isLoadingMedia.value = false
                 } else {
-                    _loadError.value = result.exceptionOrNull()?.message ?: "加载失败"
+                    val resolveError = result.exceptionOrNull()
+                    android.util.Log.e(
+                        "PlayerCrashProbe",
+                        "prepareMedia resolve failed: mediaId=$currentMediaId, episodeId=$currentEpisodeId, " +
+                            "videoPath=${videoPath.take(300)}, error=${resolveError?.message}",
+                        resolveError
+                    )
+                    _loadError.value = resolveError?.message ?: "加载失败"
                     _isLoadingMedia.value = false
                 }
             } catch (e: Exception) {
+                android.util.Log.e(
+                    "PlayerCrashProbe",
+                    "prepareMedia exception: mediaId=$currentMediaId, episodeId=$currentEpisodeId, " +
+                        "startPosition=$startPosition, videoPath=${videoPath.take(300)}",
+                    e
+                )
                 _loadError.value = e.message ?: "未知错误"
                 _isLoadingMedia.value = false
             }

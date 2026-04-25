@@ -1,6 +1,7 @@
 package com.lomen.tv.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import kotlin.math.roundToInt
 import com.lomen.tv.domain.model.VersionInfo
 import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.theme.PrimaryYellow
+import com.lomen.tv.ui.theme.DialogUiTokens
 import androidx.tv.material3.*
 
 /**
@@ -73,6 +75,7 @@ fun VersionUpdateDialog(
                 modifier = Modifier
                     .width(DialogDimens.VersionUpdateWidth)
                     .heightIn(min = DialogDimens.VersionUpdateHeightMin, max = DialogDimens.VersionUpdateHeightMax)
+                    .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                     .onPreviewKeyEvent { keyEvent ->
                         // 统一在弹窗最外层拦截方向键，避免焦点遍历抢先导致“光标跑丢”
                         if (scrollState.maxValue > 0 && keyEvent.type == KeyEventType.KeyDown) {
@@ -99,7 +102,7 @@ fun VersionUpdateDialog(
                         false
                     },
                 colors = CardDefaults.colors(
-                    containerColor = Color(0xFF333333)
+                    containerColor = DialogUiTokens.ContainerColor
                 ),
                 onClick = {}
             ) {

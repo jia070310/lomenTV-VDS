@@ -7,6 +7,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -85,6 +86,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.lomen.tv.service.WebDavConfigServer
 import com.lomen.tv.ui.theme.BackgroundDark
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.GlassBackground
 import com.lomen.tv.ui.theme.PrimaryYellow
 import com.lomen.tv.ui.theme.SurfaceDark
@@ -172,11 +174,14 @@ private fun WebDavEditForm(
             Card(
                 onClick = {},
                 colors = CardDefaults.colors(
-                    containerColor = SurfaceDark
+                    containerColor = DialogUiTokens.ContainerColor
                 ),
                 modifier = Modifier
                     .widthIn(min = DialogDimens.WebDavFormWidthMin, max = DialogDimens.WebDavFormWidthMax)
                     .heightIn(max = DialogDimens.WebDavFormHeightMax)
+                    .clip(RoundedCornerShape(DialogUiTokens.CornerRadius))
+                    .background(DialogUiTokens.ContainerColor)
+                    .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                     .onPreviewKeyEvent { keyEvent ->
                         if (keyEvent.key == Key.Back && keyEvent.type == KeyEventType.KeyUp) {
                             onDismiss()
@@ -708,12 +713,15 @@ private fun WebDavQrCodeConfig(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(DialogDimens.QrCardWidth)
-                .height(DialogDimens.QrCardHeight),
+                .height(DialogDimens.QrCardHeight)
+                .clip(RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .background(DialogUiTokens.ContainerColor)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius)),
         ) {
         Column(
             modifier = Modifier.padding(DialogDimens.QrCardPadding),
@@ -1404,12 +1412,15 @@ fun WebDavServerAddedHintDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .widthIn(min = DialogDimens.SuccessHintWidthMin, max = DialogDimens.SuccessHintWidthMax)
                 .padding(12.dp)
+                .clip(RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .background(DialogUiTokens.ContainerColor)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .onPreviewKeyEvent { keyEvent ->
                     when (keyEvent.key) {
                         Key.DirectionUp,
@@ -1538,12 +1549,15 @@ private fun ErrorDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .widthIn(min = DialogDimens.ErrorOverlayWidthMin, max = DialogDimens.ErrorOverlayWidthMax)
                 .padding(24.dp)
+                .clip(RoundedCornerShape(DialogUiTokens.CornerRadius))
+                .background(DialogUiTokens.ContainerColor)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties {
                     canFocus = true
                 }

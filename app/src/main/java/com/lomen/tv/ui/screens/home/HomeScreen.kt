@@ -71,6 +71,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,6 +98,7 @@ import coil.request.ImageRequest
 import com.lomen.tv.ui.theme.BackgroundDark
 import com.lomen.tv.ui.theme.GlassBackground
 import com.lomen.tv.ui.theme.PrimaryYellow
+import com.lomen.tv.ui.theme.DialogUiTokens
 import com.lomen.tv.ui.theme.SurfaceDark
 import com.lomen.tv.ui.theme.TextMuted
 import com.lomen.tv.ui.theme.TextPrimary
@@ -105,6 +107,7 @@ import com.lomen.tv.ui.DialogDimens
 import com.lomen.tv.ui.screens.settings.TmdbApiSettingsDialog
 import com.lomen.tv.ui.viewmodel.VersionUpdateViewModel
 import com.lomen.tv.ui.components.VersionUpdateBadge
+import android.view.MotionEvent
 
 
 private const val HOME_SECTION_MAX_ITEMS = 10
@@ -133,6 +136,19 @@ private fun requestFirstAvailableFocus(vararg requesters: FocusRequester?): Bool
     }
     return false
 }
+
+@OptIn(ExperimentalComposeUiApi::class)
+private fun Modifier.mousePrimaryClick(onClick: () -> Unit): Modifier =
+    this.pointerInteropFilter { motionEvent ->
+        when (motionEvent.action) {
+            MotionEvent.ACTION_DOWN -> true
+            MotionEvent.ACTION_UP -> {
+                onClick()
+                true
+            }
+            else -> false
+        }
+    }
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -1044,7 +1060,13 @@ private fun MoreMediaCard(
         onClick = onClick,
         modifier = modifier
             .width(width)
-            .height(height),
+            .height(height)
+            .mousePrimaryClick { onClick() },
+        scale = CardDefaults.scale(
+            scale = 1.0f,
+            focusedScale = 1.04f,
+            pressedScale = 0.97f
+        ),
         colors = CardDefaults.colors(
             containerColor = SurfaceDark,
             focusedContainerColor = PrimaryYellow,
@@ -1274,7 +1296,13 @@ private fun RecentCard(
         modifier = modifier
             .width(320.dp)
             .height(180.dp)
+            .mousePrimaryClick { onClick() }
             .onFocusChanged { isFocused = it.isFocused },
+        scale = CardDefaults.scale(
+            scale = 1.0f,
+            focusedScale = 1.04f,
+            pressedScale = 0.97f
+        ),
         colors = CardDefaults.colors(
             containerColor = SurfaceDark,
             focusedContainerColor = PrimaryYellow.copy(alpha = 0.2f),
@@ -1471,6 +1499,7 @@ private fun TvShowCard(
             modifier = Modifier
                 .width(160.dp)
                 .height(213.dp)
+                .mousePrimaryClick { onClick() }
                 .onFocusChanged { isFocused = it.isFocused },
             colors = CardDefaults.colors(
                 containerColor = SurfaceDark,
@@ -1605,7 +1634,13 @@ private fun ConcertCard(
         modifier = Modifier
             .width(200.dp)
             .height(250.dp)
+            .mousePrimaryClick { onClick() }
             .onFocusChanged { isFocused = it.isFocused },
+        scale = CardDefaults.scale(
+            scale = 1.0f,
+            focusedScale = 1.04f,
+            pressedScale = 0.97f
+        ),
         colors = CardDefaults.colors(
             containerColor = SurfaceDark,
             focusedContainerColor = PrimaryYellow.copy(alpha = 0.2f),
@@ -1963,7 +1998,13 @@ private fun WebDavMediaCard(
             modifier = modifier
                 .width(160.dp)
                 .height(240.dp)
+                .mousePrimaryClick { onClick() }
                 .onFocusChanged { isFocused = it.isFocused },
+            scale = CardDefaults.scale(
+                scale = 1.0f,
+                focusedScale = 1.04f,
+                pressedScale = 0.97f
+            ),
             colors = CardDefaults.colors(
                 containerColor = SurfaceDark,
                 focusedContainerColor = SurfaceDark,  // 选中时保持背景不变，避免遮盖标题
@@ -2095,7 +2136,13 @@ private fun TvShowSeriesCard(
             modifier = modifier
                 .width(160.dp)
                 .height(240.dp)
+                .mousePrimaryClick { onClick() }
                 .onFocusChanged { isFocused = it.isFocused },
+            scale = CardDefaults.scale(
+                scale = 1.0f,
+                focusedScale = 1.04f,
+                pressedScale = 0.97f
+            ),
             colors = CardDefaults.colors(
                 containerColor = SurfaceDark,
                 focusedContainerColor = SurfaceDark,  // 选中时保持背景不变，避免遮盖标题
@@ -2289,12 +2336,13 @@ private fun TmdbApiRequiredDialog(
         Card(
             onClick = {},
             colors = CardDefaults.colors(
-                containerColor = SurfaceDark,
-                focusedContainerColor = SurfaceDark
+                containerColor = DialogUiTokens.ContainerColor,
+                focusedContainerColor = DialogUiTokens.ContainerColor
             ),
             modifier = Modifier
                 .width(DialogDimens.CardWidthStandard)
                 .padding(DialogDimens.CardPaddingOuter)
+                .border(DialogUiTokens.BorderWidth, DialogUiTokens.BorderColor, RoundedCornerShape(DialogUiTokens.CornerRadius))
                 .focusProperties {
                     // 弹窗卡片本身不抢焦点，仅允许内部按钮获得焦点，避免焦点逃逸到弹窗外
                     canFocus = false

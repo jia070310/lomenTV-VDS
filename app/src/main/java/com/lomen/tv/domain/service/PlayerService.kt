@@ -1,6 +1,8 @@
 package com.lomen.tv.domain.service
 
 import android.content.Context
+import android.app.ActivityManager
+import android.os.Build
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -9,6 +11,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
@@ -49,9 +52,11 @@ class PlayerService @Inject constructor(
     
     private val _selectedSubtitleIndex = MutableStateFlow(-1) // -1表示无字幕
     val selectedSubtitleIndex: StateFlow<Int> = _selectedSubtitleIndex.asStateFlow()
+    private val subtitleTrackOverrides = mutableMapOf<Int, TrackSelectionOverride>()
     
     private val _selectedAudioTrackIndex = MutableStateFlow(0)
     val selectedAudioTrackIndex: StateFlow<Int> = _selectedAudioTrackIndex.asStateFlow()
+    private val audioTrackOverrides = mutableMapOf<Int, TrackSelectionOverride>()
     
     // 错误重试机制
     private var errorRetryCount = 0
@@ -61,6 +66,7 @@ class PlayerService @Inject constructor(
     private var currentMediaTitle: String? = null
     private var currentMediaEpisodeTitle: String? = null
     private var currentStartPosition: Long = 0
+    private var autoSubtitleAppliedForCurrentMedia: Boolean = false
 
     @OptIn(UnstableApi::class)
     fun initializePlayer(): ExoPlayer {
@@ -79,6 +85,16 @@ class PlayerService @Inject constructor(
                 exoPlayer = null
                 trackSelector = null
             }
+            val memoryProfile = buildPlaybackMemoryProfile(context)
+            android.util.Log.i(
+                "PlayerService",
+                "Playback memory profile: maxVideo=${memoryProfile.maxVideoWidth}x${memoryProfile.maxVideoHeight}, " +
+                    "maxBitrate=${memoryProfile.maxVideoBitrate}, " +
+                    "buffers(min/max/start/rebuffer)=" +
+                    "${memoryProfile.minBufferMs}/${memoryProfile.maxBufferMs}/" +
+                    "${memoryProfile.bufferForPlaybackMs}/${memoryProfile.bufferForPlaybackAfterRebufferMs}"
+            )
+
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
@@ -87,11 +103,10 @@ class PlayerService @Inject constructor(
             // 创建TrackSelector以支持自定义轨道选择
             trackSelector = DefaultTrackSelector(context)
             val trackParams = DefaultTrackSelector.Parameters.Builder(context)
-                // 支持4K视频
-                .setMaxVideoSize(3840, 2160)
-                .setMaxVideoBitrate(50_000_000) // 50Mbps
-                // 优先选择高质量，但不强制（允许回退到软件解码器）
-                .setPreferredVideoMimeType(MimeTypes.VIDEO_H265) // 优先H.265
+                // 低内存设备/模拟器限制峰值，降低 OOM 概率
+                .setMaxVideoSize(memoryProfile.maxVideoWidth, memoryProfile.maxVideoHeight)
+                .setMaxVideoBitrate(memoryProfile.maxVideoBitrate)
+                // 不再强行偏好 H.265，避免高复杂度解码带来额外内存/CPU 压力
                 .setForceHighestSupportedBitrate(false)
                 // 允许选择任何支持的视频格式（包括软件解码器支持的格式）
                 .setTunnelingEnabled(false) // 禁用隧道模式，确保可以使用软件解码器
@@ -102,10 +117,10 @@ class PlayerService @Inject constructor(
             // 对于软件解码（特别是模拟器），需要更大的缓冲区来保证流畅播放
             val loadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    50_000,  // minBufferMs - 最小缓冲 50 秒（增加给软解更多准备时间）
-                    120_000, // maxBufferMs - 最大缓冲 120 秒（应对高码率 4K）
-                    5_000,   // bufferForPlaybackMs - 开始播放需要 5 秒（确保有足够数据）
-                    10_000   // bufferForPlaybackAfterRebufferMs - 重新缓冲需要 10 秒
+                    memoryProfile.minBufferMs,
+                    memoryProfile.maxBufferMs,
+                    memoryProfile.bufferForPlaybackMs,
+                    memoryProfile.bufferForPlaybackAfterRebufferMs
                 )
                 .setPrioritizeTimeOverSizeThresholds(true) // 优先保证时间阈值，而不是数据量
                 .build()
@@ -201,6 +216,9 @@ class PlayerService @Inject constructor(
         currentMediaTitle = title
         currentMediaEpisodeTitle = episodeTitle
         currentStartPosition = startPositionMs
+        autoSubtitleAppliedForCurrentMedia = false
+        _selectedSubtitleIndex.value = -1
+        subtitleTrackOverrides.clear()
         // 重置错误重试计数（成功准备新媒体时重置）
         errorRetryCount = 0
         lastErrorCode = 0
@@ -252,17 +270,14 @@ class PlayerService @Inject constructor(
         
         // 添加字幕
         if (subtitles.isNotEmpty()) {
-            subtitles.forEach { subtitle ->
-                mediaItemBuilder.setSubtitleConfigurations(
-                    listOf(
-                        MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subtitle.url))
-                            .setMimeType(subtitle.mimeType)
-                            .setLanguage(subtitle.language)
-                            .setLabel(subtitle.label)
-                            .build()
-                    )
-                )
+            val subtitleConfigs = subtitles.map { subtitle ->
+                MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subtitle.url))
+                    .setMimeType(subtitle.mimeType)
+                    .setLanguage(subtitle.language)
+                    .setLabel(subtitle.label)
+                    .build()
             }
+            mediaItemBuilder.setSubtitleConfigurations(subtitleConfigs)
         }
         
         val mediaItem = mediaItemBuilder.build()
@@ -601,17 +616,28 @@ class PlayerService @Inject constructor(
     @OptIn(UnstableApi::class)
     fun selectSubtitle(index: Int) {
         trackSelector?.let { selector ->
-            val parameters = selector.parameters
+            val builder = selector.parameters
                 .buildUpon()
-                .setPreferredTextLanguage(
-                    if (index >= 0 && index < _availableSubtitles.value.size) {
-                        _availableSubtitles.value[index].language
-                    } else {
-                        null
-                    }
-                )
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, index < 0)
-                .build()
+
+            val parameters = if (index >= 0 && index < _availableSubtitles.value.size) {
+                val override = subtitleTrackOverrides[index]
+                if (override != null) {
+                    builder
+                        .setPreferredTextLanguage(null)
+                        .addOverride(override)
+                        .build()
+                } else {
+                    builder
+                        .setPreferredTextLanguage(_availableSubtitles.value[index].language)
+                        .build()
+                }
+            } else {
+                builder
+                    .setPreferredTextLanguage(null)
+                    .build()
+            }
             
             selector.parameters = parameters
             _selectedSubtitleIndex.value = index
@@ -625,11 +651,32 @@ class PlayerService @Inject constructor(
     fun selectAudioTrack(index: Int) {
         trackSelector?.let { selector ->
             if (index >= 0 && index < _availableAudioTracks.value.size) {
-                val parameters = selector.parameters
+                val override = audioTrackOverrides[index]
+                val builder = selector.parameters
                     .buildUpon()
-                    .setPreferredAudioLanguage(_availableAudioTracks.value[index].language)
-                    .build()
-                
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+
+                val parameters = if (override != null) {
+                    android.util.Log.i(
+                        "PlayerService",
+                        "selectAudioTrack: force override index=$index, label=${_availableAudioTracks.value[index].label}, language=${_availableAudioTracks.value[index].language}"
+                    )
+                    builder
+                        .setPreferredAudioLanguage(null)
+                        .addOverride(override)
+                        .build()
+                } else {
+                    // 兜底：若未构建到 override，退回旧逻辑按语言偏好选择
+                    android.util.Log.w(
+                        "PlayerService",
+                        "selectAudioTrack: override missing for index=$index, fallback by language=${_availableAudioTracks.value[index].language}"
+                    )
+                    builder
+                        .setPreferredAudioLanguage(_availableAudioTracks.value[index].language)
+                        .build()
+                }
+
                 selector.parameters = parameters
                 _selectedAudioTrackIndex.value = index
             }
@@ -645,41 +692,141 @@ class PlayerService @Inject constructor(
             val tracks = player.currentTracks
             
             // 更新字幕列表
+            subtitleTrackOverrides.clear()
             val subtitles = mutableListOf<TrackInfo>()
+            var subtitleIndex = 0
             for (trackGroup in tracks.groups) {
                 if (trackGroup.type == C.TRACK_TYPE_TEXT) {
                     for (i in 0 until trackGroup.length) {
                         val format = trackGroup.getTrackFormat(i)
+                        val rawLabel = format.label?.trim().orEmpty()
+                        val label = if (rawLabel.contains("[外挂]") || rawLabel.contains("[内嵌]")) {
+                            rawLabel
+                        } else {
+                            val fallback = if (rawLabel.isNotBlank()) rawLabel else "字幕 ${subtitleIndex + 1}"
+                            "[内嵌] $fallback"
+                        }
                         subtitles.add(
                             TrackInfo(
-                                index = subtitles.size,
+                                index = subtitleIndex,
                                 language = format.language ?: "unknown",
-                                label = format.label ?: "字幕 ${subtitles.size + 1}"
+                                label = label
                             )
                         )
+                        subtitleTrackOverrides[subtitleIndex] = TrackSelectionOverride(trackGroup.mediaTrackGroup, i)
+                        subtitleIndex++
                     }
                 }
             }
             _availableSubtitles.value = subtitles
+            maybeAutoEnableSubtitle(subtitles)
             
             // 更新音轨列表
+            audioTrackOverrides.clear()
             val audioTracks = mutableListOf<TrackInfo>()
+            var audioIndex = 0
             for (trackGroup in tracks.groups) {
                 if (trackGroup.type == C.TRACK_TYPE_AUDIO) {
                     for (i in 0 until trackGroup.length) {
                         val format = trackGroup.getTrackFormat(i)
+                        val language = format.language ?: "unknown"
+                        val codec = format.sampleMimeType ?: format.codecs ?: "unknown"
+                        val channelInfo = format.channelCount.takeIf { it > 0 }?.let { "${it}ch" } ?: ""
+                        val sampleRateInfo = format.sampleRate.takeIf { it > 0 }?.let { "${it}Hz" } ?: ""
+                        val extra = listOf(codec, channelInfo, sampleRateInfo)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" / ")
+                        val defaultLabel = "音轨 ${audioTracks.size + 1}"
+                        val displayLabel = buildString {
+                            append(format.label ?: defaultLabel)
+                            if (extra.isNotBlank()) {
+                                append("  ")
+                                append(extra)
+                            }
+                        }
                         audioTracks.add(
                             TrackInfo(
-                                index = audioTracks.size,
-                                language = format.language ?: "unknown",
-                                label = format.label ?: "音轨 ${audioTracks.size + 1}"
+                                index = audioIndex,
+                                language = language,
+                                label = displayLabel
                             )
                         )
+                        audioTrackOverrides[audioIndex] = TrackSelectionOverride(trackGroup.mediaTrackGroup, i)
+                        audioIndex++
                     }
                 }
             }
             _availableAudioTracks.value = audioTracks
         }
+    }
+
+    /**
+     * 新媒体首次进入时自动打开一条字幕（优先中文），减少每次手动开启的操作。
+     */
+    private fun maybeAutoEnableSubtitle(subtitles: List<TrackInfo>) {
+        if (autoSubtitleAppliedForCurrentMedia) return
+        if (subtitles.isEmpty()) return
+
+        val preferredIndex = subtitles.indexOfFirst { track ->
+            val text = "${track.label} ${track.language}".lowercase()
+            text.contains("zh") ||
+                text.contains("chi") ||
+                text.contains("中文") ||
+                text.contains("简") ||
+                text.contains("繁")
+        }.let { if (it >= 0) it else 0 }
+
+        android.util.Log.i(
+            "PlayerService",
+            "Auto enabling subtitle index=$preferredIndex, label=${subtitles[preferredIndex].label}"
+        )
+        autoSubtitleAppliedForCurrentMedia = true
+        selectSubtitle(preferredIndex)
+    }
+}
+
+private data class PlaybackMemoryProfile(
+    val maxVideoWidth: Int,
+    val maxVideoHeight: Int,
+    val maxVideoBitrate: Int,
+    val minBufferMs: Int,
+    val maxBufferMs: Int,
+    val bufferForPlaybackMs: Int,
+    val bufferForPlaybackAfterRebufferMs: Int
+)
+
+private fun buildPlaybackMemoryProfile(context: Context): PlaybackMemoryProfile {
+    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    val memoryClassMb = activityManager?.memoryClass ?: 256
+    val lowRamDevice = activityManager?.isLowRamDevice == true
+    val maxHeapMb = (Runtime.getRuntime().maxMemory() / (1024 * 1024)).toInt()
+    val isEmulator = Build.FINGERPRINT.contains("generic", ignoreCase = true) ||
+        Build.MODEL.contains("Emulator", ignoreCase = true) ||
+        Build.MODEL.contains("Android SDK", ignoreCase = true) ||
+        Build.MANUFACTURER.contains("Genymotion", ignoreCase = true)
+
+    val constrained = lowRamDevice || isEmulator || memoryClassMb <= 256 || maxHeapMb <= 256
+    return if (constrained) {
+        // 更保守：优先稳定，避免播放线程 OOM
+        PlaybackMemoryProfile(
+            maxVideoWidth = 1920,
+            maxVideoHeight = 1080,
+            maxVideoBitrate = 8_000_000,
+            minBufferMs = 10_000,
+            maxBufferMs = 30_000,
+            bufferForPlaybackMs = 1_500,
+            bufferForPlaybackAfterRebufferMs = 2_500
+        )
+    } else {
+        PlaybackMemoryProfile(
+            maxVideoWidth = 3840,
+            maxVideoHeight = 2160,
+            maxVideoBitrate = 20_000_000,
+            minBufferMs = 15_000,
+            maxBufferMs = 45_000,
+            bufferForPlaybackMs = 2_000,
+            bufferForPlaybackAfterRebufferMs = 3_000
+        )
     }
 }
 
