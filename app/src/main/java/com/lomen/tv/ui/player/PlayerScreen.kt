@@ -72,6 +72,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -110,6 +111,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import android.view.MotionEvent
+import android.view.View
 
 private fun PlayerView.applyTransparentSubtitleStyle() {
     subtitleView?.apply {
@@ -150,6 +152,7 @@ private val PROGRESS_BAR_HEIGHT = 6.dp
 private val PROGRESS_BUBBLE_MIN_WIDTH = 88.dp
 private val PROGRESS_BUBBLE_MAX_WIDTH = 170.dp
 private const val FOCUS_ANIMATION_DURATION_MS = 170
+private const val PLAYER_DEBUG_TAG = "PlayerScreenDebug"
 
 @OptIn(
     ExperimentalTvMaterial3Api::class,
@@ -165,9 +168,11 @@ fun PlayerScreen(
     episodeId: String? = null,
     startPosition: Long = 0L,
     onBackPressed: () -> Unit,
+    onRegisterGlobalKeyHandler: (((KeyEvent) -> Boolean)?) -> Unit = {},
     viewModel: PlayerViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val playerState by viewModel.playerState.collectAsState()
     val episodeMessage by viewModel.episodeNavigationMessage.collectAsState()
     var showControls by remember { mutableStateOf(true) }
@@ -254,8 +259,16 @@ fun PlayerScreen(
     val progressBarFocusRequester = remember { FocusRequester() }
     var requestPlayPauseFocusToken by remember { mutableStateOf(0) }
     var requestProgressFocusToken by remember { mutableStateOf(0) }
+    var requestRootFocusRestoreToken by remember { mutableStateOf(0) }
     var navInitialFocusZone by remember { mutableStateOf(ControlFocusZone.BOTTOM_BUTTONS) }
     var focusedControlZone by remember { mutableStateOf(ControlFocusZone.NONE) }
+    var rootHasFocus by remember { mutableStateOf(false) }
+    
+    fun debugLog(message: String) {
+        if (com.lomen.tv.BuildConfig.DEBUG) {
+            android.util.Log.d(PLAYER_DEBUG_TAG, message)
+        }
+    }
 
     // 设置媒体信息、跳过配置、选集列表（同一 Effect，避免与下方 getEpisodeList 竞态导致选集恒空）
     LaunchedEffect(mediaId, episodeId) {
@@ -343,12 +356,18 @@ fun PlayerScreen(
                 // 超过6秒没有操作，隐藏控制栏
                 showControls = false
                 controlsMode = null
+                requestRootFocusRestoreToken++
+                debugLog("auto-hide controls -> restoreRootFocus token=$requestRootFocusRestoreToken")
             }
         }
     }
     
     // 当控制栏显示时，根据模式处理焦点
     LaunchedEffect(showControls, controlsMode, requestPlayPauseFocusToken, requestProgressFocusToken) {
+        debugLog(
+            "focus-dispatch showControls=$showControls mode=$controlsMode " +
+                "navInitial=$navInitialFocusZone reqPlay=$requestPlayPauseFocusToken reqProgress=$requestProgressFocusToken"
+        )
         if (showControls) {
             delay(100) // 等待UI渲染
             when (controlsMode) {
@@ -370,6 +389,37 @@ fun PlayerScreen(
             }
         }
     }
+    
+    // 控制栏隐藏后，先清空旧焦点，再在退出动画后把焦点收回根容器
+    LaunchedEffect(requestRootFocusRestoreToken, showEpisodeListDialog) {
+        if (requestRootFocusRestoreToken > 0 && !showEpisodeListDialog) {
+            debugLog("restore-root-focus token=$requestRootFocusRestoreToken clearFocus(force=true)")
+            focusManager.clearFocus(force = true)
+            // 控制栏隐藏时已经直接移除，不需要再等待淡出动画
+            delay(16)
+            focusRequester.requestFocus()
+            debugLog("restore-root-focus requested to root box")
+        }
+    }
+    
+    LaunchedEffect(showControls, controlsMode, focusedControlZone, showEpisodeListDialog) {
+        if (!showControls && focusedControlZone != ControlFocusZone.NONE) {
+            focusedControlZone = ControlFocusZone.NONE
+        }
+        debugLog(
+            "ui-state showControls=$showControls mode=$controlsMode " +
+                "focusedZone=$focusedControlZone episodeDialog=$showEpisodeListDialog"
+        )
+    }
+    
+    // 兜底：控制栏隐藏时，持续保证根容器持有焦点，避免首按先用于“激活焦点”
+    LaunchedEffect(showControls, showEpisodeListDialog, rootHasFocus) {
+        if (!showControls && !showEpisodeListDialog && !rootHasFocus) {
+            focusManager.clearFocus(force = true)
+            focusRequester.requestFocus()
+            debugLog("focus-guard request root focus because controls hidden")
+        }
+    }
 
     // 释放播放器
     DisposableEffect(Unit) {
@@ -388,6 +438,8 @@ fun PlayerScreen(
         } else if (showControls) {
             showControls = false
             controlsMode = null
+            requestRootFocusRestoreToken++
+            debugLog("BackHandler hide controls -> restoreRootFocus token=$requestRootFocusRestoreToken")
         } else {
             if (backPressedOnce) {
                 // 第二次按返回键，退出播放
@@ -410,169 +462,190 @@ fun PlayerScreen(
             }
         }
     }
+    
+    fun handleRemoteKeyDown(keyCode: Int, source: String): Boolean {
+        debugLog(
+            "key-down source=$source code=$keyCode showControls=$showControls " +
+                "mode=$controlsMode zone=$focusedControlZone episodeDialog=$showEpisodeListDialog"
+        )
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER -> {
+                if (showControls && controlsMode == ControlsMode.NAV) {
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("pass-through key=OK/ENTER reason=letFocusedControlHandleClick source=$source")
+                    false
+                } else {
+                    showControls = true
+                    controlsMode = ControlsMode.NAV
+                    navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                    requestPlayPauseFocusToken++
+                    updateInteractionTime { lastInteractionTime = it }
+                    viewModel.togglePlayPause()
+                    debugLog("consume key=OK/ENTER action=togglePlayPause+showControls source=$source")
+                    true
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (showControls &&
+                    (focusedControlZone == ControlFocusZone.TOP_BAR ||
+                        focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS)
+                ) {
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("pass-through key=LEFT reason=topOrBottomButtonZone source=$source")
+                    false
+                } else {
+                    showControls = true
+                    controlsMode = ControlsMode.SEEK_OVERLAY
+                    updateInteractionTime { lastInteractionTime = it }
+                    viewModel.seekBackward(seekDurationSeconds * 1000L)
+                    debugLog("consume key=LEFT action=seekBackward source=$source")
+                    true
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (showControls &&
+                    (focusedControlZone == ControlFocusZone.TOP_BAR ||
+                        focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS)
+                ) {
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("pass-through key=RIGHT reason=topOrBottomButtonZone source=$source")
+                    false
+                } else {
+                    showControls = true
+                    controlsMode = ControlsMode.SEEK_OVERLAY
+                    updateInteractionTime { lastInteractionTime = it }
+                    viewModel.seekForward(seekDurationSeconds * 1000L)
+                    debugLog("consume key=RIGHT action=seekForward source=$source")
+                    true
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                if (!showControls) {
+                    debugLog("consume key=UP action=blockedWhenControlsHidden source=$source")
+                    true
+                } else if (controlsMode == ControlsMode.SEEK_OVERLAY) {
+                    controlsMode = ControlsMode.NAV
+                    navInitialFocusZone = ControlFocusZone.PROGRESS
+                    requestProgressFocusToken++
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("consume key=UP action=switchToNAV+focusProgress source=$source")
+                    true
+                } else {
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("pass-through key=UP reason=systemFocusMove source=$source")
+                    false
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (!showControls) {
+                    showControls = true
+                    controlsMode = ControlsMode.NAV
+                    navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                    requestPlayPauseFocusToken++
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("consume key=DOWN action=showControls+focusPlayPause source=$source")
+                    true
+                } else if (controlsMode == ControlsMode.SEEK_OVERLAY) {
+                    controlsMode = ControlsMode.NAV
+                    navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                    requestPlayPauseFocusToken++
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("consume key=DOWN action=seekOverlayToNAV+focusPlayPause source=$source")
+                    true
+                } else {
+                    updateInteractionTime { lastInteractionTime = it }
+                    debugLog("pass-through key=DOWN reason=systemFocusMove source=$source")
+                    false
+                }
+            }
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_SETTINGS,
+            KeyEvent.KEYCODE_INFO -> {
+                showControls = true
+                controlsMode = ControlsMode.NAV
+                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                requestPlayPauseFocusToken++
+                updateInteractionTime { lastInteractionTime = it }
+                debugLog("consume key=MENU_GROUP action=showControls+focusPlayPause source=$source")
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                showControls = true
+                controlsMode = ControlsMode.NAV
+                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
+                requestPlayPauseFocusToken++
+                updateInteractionTime { lastInteractionTime = it }
+                viewModel.togglePlayPause()
+                debugLog("consume key=MEDIA_PLAY_PAUSE action=togglePlayPause source=$source")
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                showControls = true
+                controlsMode = ControlsMode.SEEK_OVERLAY
+                updateInteractionTime { lastInteractionTime = it }
+                viewModel.seekBackward(seekDurationSeconds * 1000L)
+                debugLog("consume key=MEDIA_REWIND action=seekBackward source=$source")
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                showControls = true
+                controlsMode = ControlsMode.SEEK_OVERLAY
+                updateInteractionTime { lastInteractionTime = it }
+                viewModel.seekForward(seekDurationSeconds * 1000L)
+                debugLog("consume key=MEDIA_FAST_FORWARD action=seekForward source=$source")
+                true
+            }
+            KeyEvent.KEYCODE_BACK -> {
+                if (showEpisodeListDialog) {
+                    showEpisodeListDialog = false
+                    debugLog("consume key=BACK action=closeEpisodeDialog source=$source")
+                    true
+                } else if (showControls) {
+                    showControls = false
+                    controlsMode = null
+                    requestRootFocusRestoreToken++
+                    debugLog("consume key=BACK action=hideControls+restoreRootFocus source=$source")
+                    true
+                } else {
+                    debugLog("pass-through key=BACK reason=delegateToBackHandler source=$source")
+                    false
+                }
+            }
+            else -> {
+                debugLog("pass-through key=$keyCode reason=notHandled source=$source")
+                false
+            }
+        }
+    }
+    
+    DisposableEffect(onRegisterGlobalKeyHandler) {
+        onRegisterGlobalKeyHandler { nativeEvent ->
+            if (nativeEvent.action != KeyEvent.ACTION_DOWN) return@onRegisterGlobalKeyHandler false
+            handleRemoteKeyDown(nativeEvent.keyCode, source = "activity")
+        }
+        onDispose {
+            onRegisterGlobalKeyHandler(null)
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundDark)
+            .focusProperties {
+                // 控制栏显示时，根容器不参与焦点竞争，避免首按先落在根节点
+                canFocus = !showControls
+            }
             .focusable()
             .focusRequester(focusRequester)
-            .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
-                    if (showEpisodeListDialog) {
-                        showEpisodeListDialog = false
-                        true
-                    } else if (showControls) {
-                        showControls = false
-                        controlsMode = null
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+            .onFocusChanged { focusState ->
+                rootHasFocus = focusState.hasFocus
+                debugLog("root-focus hasFocus=${focusState.hasFocus}")
             }
-            .onKeyEvent { event ->
-                if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
-                    when (event.nativeKeyEvent.keyCode) {
-                        // OK键：切换播放/暂停，同时呼出控制栏（进入导航模式）
-                        KeyEvent.KEYCODE_DPAD_CENTER,
-                        KeyEvent.KEYCODE_ENTER -> {
-                            showControls = true
-                            controlsMode = ControlsMode.NAV
-                            navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
-                            requestPlayPauseFocusToken++
-                            updateInteractionTime { lastInteractionTime = it }
-                            viewModel.togglePlayPause()
-                            true
-                        }
-                        // 左键：始终快退并呼出状态栏
-                        KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (showControls &&
-                                (focusedControlZone == ControlFocusZone.TOP_BAR ||
-                                    focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS)
-                            ) {
-                                // 在按钮导航区时，交给系统做焦点左右移动
-                                updateInteractionTime { lastInteractionTime = it }
-                                return@onKeyEvent false
-                            }
-                            showControls = true
-                            controlsMode = ControlsMode.SEEK_OVERLAY
-                            updateInteractionTime { lastInteractionTime = it }
-                            viewModel.seekBackward(seekDurationSeconds * 1000L)
-                            true
-                        }
-                        // 右键：始终快进并呼出状态栏
-                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (showControls &&
-                                (focusedControlZone == ControlFocusZone.TOP_BAR ||
-                                    focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS)
-                            ) {
-                                // 在按钮导航区时，交给系统做焦点左右移动
-                                updateInteractionTime { lastInteractionTime = it }
-                                return@onKeyEvent false
-                            }
-                            showControls = true
-                            controlsMode = ControlsMode.SEEK_OVERLAY
-                            updateInteractionTime { lastInteractionTime = it }
-                            viewModel.seekForward(seekDurationSeconds * 1000L)
-                            true
-                        }
-                        // 上键：不作为呼出键
-                        KeyEvent.KEYCODE_DPAD_UP -> {
-                            if (!showControls) {
-                                // 控制栏隐藏时，上键无效（不作为呼出键）
-                                true
-                            } else if (controlsMode == ControlsMode.SEEK_OVERLAY) {
-                                // 快进退反馈态下，上键切到可导航模式并聚焦进度条
-                                controlsMode = ControlsMode.NAV
-                                navInitialFocusZone = ControlFocusZone.PROGRESS
-                                requestProgressFocusToken++
-                                updateInteractionTime { lastInteractionTime = it }
-                                true
-                            } else {
-                                // 控制栏显示时，交给系统处理焦点上移
-                                updateInteractionTime { lastInteractionTime = it }
-                                false
-                            }
-                        }
-                        // 下键：呼出控制栏并进入导航模式，焦点聚焦到播放/暂停按钮
-                        KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            if (!showControls) {
-                                // 控制栏隐藏时，下键呼出控制栏并进入导航模式
-                                showControls = true
-                                controlsMode = ControlsMode.NAV
-                                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
-                                requestPlayPauseFocusToken++
-                                updateInteractionTime { lastInteractionTime = it }
-                                // 直接消费按键，焦点由 LaunchedEffect 主动请求到播放/暂停按钮
-                                true
-                            } else if (controlsMode == ControlsMode.SEEK_OVERLAY) {
-                                // 快进退反馈态下，下键切到可导航模式并聚焦底部按钮区
-                                controlsMode = ControlsMode.NAV
-                                navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
-                                requestPlayPauseFocusToken++
-                                updateInteractionTime { lastInteractionTime = it }
-                                true
-                            } else {
-                                // 控制栏显示时，交给系统处理焦点下移
-                                updateInteractionTime { lastInteractionTime = it }
-                                false
-                            }
-                        }
-                        // 菜单键族（菜单/设置/信息）：呼出控制栏并聚焦播放按钮
-                        KeyEvent.KEYCODE_MENU,
-                        KeyEvent.KEYCODE_SETTINGS,
-                        KeyEvent.KEYCODE_INFO -> {
-                            showControls = true
-                            controlsMode = ControlsMode.NAV
-                            navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
-                            requestPlayPauseFocusToken++
-                            updateInteractionTime { lastInteractionTime = it }
-                            true
-                        }
-                        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                            showControls = true
-                            controlsMode = ControlsMode.NAV
-                            navInitialFocusZone = ControlFocusZone.BOTTOM_BUTTONS
-                            requestPlayPauseFocusToken++
-                            updateInteractionTime { lastInteractionTime = it }
-                            viewModel.togglePlayPause()
-                            true
-                        }
-                        KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                            showControls = true
-                            controlsMode = ControlsMode.SEEK_OVERLAY
-                            updateInteractionTime { lastInteractionTime = it }
-                            viewModel.seekBackward(seekDurationSeconds * 1000L)
-                            true
-                        }
-                        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                            showControls = true
-                            controlsMode = ControlsMode.SEEK_OVERLAY
-                            updateInteractionTime { lastInteractionTime = it }
-                            viewModel.seekForward(seekDurationSeconds * 1000L)
-                            true
-                        }
-                        // 返回键：隐藏状态栏
-                        KeyEvent.KEYCODE_BACK -> {
-                            if (showEpisodeListDialog) {
-                                showEpisodeListDialog = false
-                                true
-                            } else if (showControls) {
-                                showControls = false
-                                controlsMode = null
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        else -> false
-                    }
-                } else {
-                    false
-                }
+            .onPreviewKeyEvent { event ->
+                if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
+                handleRemoteKeyDown(event.nativeKeyEvent.keyCode, source = "compose")
             }
     ) {
         val revealControlsFromPointer: () -> Unit = {
@@ -589,6 +662,10 @@ fun PlayerScreen(
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
+                    // 让按键焦点留在 Compose 根容器，避免 PlayerView 抢焦点造成“首按仅激活”
+                    isFocusable = false
+                    isFocusableInTouchMode = false
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
                     useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     // 保持屏幕常亮
@@ -596,12 +673,17 @@ fun PlayerScreen(
                     applyTransparentSubtitleStyle()
                     // 设置播放器
                     player = viewModel.getPlayer()
+                    onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
+                        debugLog("PlayerView focusChanged hasFocus=$hasFocus")
+                    }
                     setOnClickListener {
+                        debugLog("PlayerView onClick -> reveal controls")
                         // 原生 View 点击链路，兼容模拟器鼠标左键点击
                         revealControlsFromPointer()
                     }
                     setOnTouchListener { _, motionEvent ->
                         if (motionEvent.action == MotionEvent.ACTION_UP) {
+                            debugLog("PlayerView touchUp -> reveal controls")
                             revealControlsFromPointer()
                             true
                         } else {
@@ -613,6 +695,7 @@ fun PlayerScreen(
                             motionEvent.action == MotionEvent.ACTION_BUTTON_PRESS &&
                                 (motionEvent.buttonState and MotionEvent.BUTTON_PRIMARY) != 0
                         if (isPrimaryMousePress) {
+                            debugLog("PlayerView primaryMousePress -> reveal controls")
                             revealControlsFromPointer()
                             true
                         } else {
@@ -633,13 +716,8 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 顶部信息栏
-        AnimatedVisibility(
-            visible = showControls,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter)
-        ) {
+        // 顶部信息栏（隐藏时直接移除，避免不可见控件残留焦点）
+        if (showControls) {
             PlayerTopBar(
                 title = currentTitle ?: "",
                 episodeTitle = currentEpisodeTitle,
@@ -647,7 +725,9 @@ fun PlayerScreen(
                 backButtonFocusRequester = backButtonFocusRequester,
                 progressBarFocusRequester = progressBarFocusRequester,
                 onBackButtonFocusChanged = { isFocused ->
-                    if (isFocused) {
+                    if (!showControls) {
+                        focusedControlZone = ControlFocusZone.NONE
+                    } else if (isFocused) {
                         focusedControlZone = ControlFocusZone.TOP_BAR
                     } else if (focusedControlZone == ControlFocusZone.TOP_BAR) {
                         focusedControlZone = ControlFocusZone.NONE
@@ -664,8 +744,19 @@ fun PlayerScreen(
             ) {
                 IconButton(
                     onClick = { viewModel.play() },
+                    colors = IconButtonDefaults.colors(
+                        containerColor = Color.Transparent,
+                        focusedContainerColor = Color.Black.copy(alpha = 0.5f),
+                        pressedContainerColor = Color.Black.copy(alpha = 0.6f),
+                        contentColor = Color.White,
+                        focusedContentColor = PrimaryYellow
+                    ),
                     modifier = Modifier
                         .size(80.dp)
+                        .focusProperties {
+                            // 控制栏隐藏时，避免该按钮抢焦点显示成白色圆形
+                            canFocus = showControls
+                        }
                         .mousePrimaryClick { viewModel.play() }
                 ) {
                     Icon(
@@ -692,62 +783,63 @@ fun PlayerScreen(
             }
         }
 
-        // 底部控制栏
-        AnimatedVisibility(
-            visible = showControls,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            PlayerControls(
-                playerState = playerState,
-                onPlayPause = { viewModel.togglePlayPause() },
-                onSeekTo = { position -> viewModel.seekTo(position) },
-                onSeekBackward = { viewModel.seekBackward() },
-                onSeekForward = { viewModel.seekForward() },
-                onSkipPrevious = { viewModel.seekToPrevious() },
-                onSkipNext = { viewModel.seekToNext() },
-                onUpdateInteractionTime = { lastInteractionTime = System.currentTimeMillis() },
-                playPauseFocusRequester = playPauseFocusRequester,
-                backButtonFocusRequester = backButtonFocusRequester,
-                progressBarFocusRequester = progressBarFocusRequester,
-                isLocked = false,
-                forceProgressBubbleHighlight = controlsMode == ControlsMode.SEEK_OVERLAY,
-                onProgressFocusChanged = { isFocused ->
-                    if (isFocused) {
-                        focusedControlZone = ControlFocusZone.PROGRESS
-                    } else if (focusedControlZone == ControlFocusZone.PROGRESS) {
-                        focusedControlZone = ControlFocusZone.NONE
-                    }
-                },
-                onBottomButtonFocusChanged = { isFocused ->
-                    if (isFocused) {
-                        focusedControlZone = ControlFocusZone.BOTTOM_BUTTONS
-                    } else if (focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS) {
-                        focusedControlZone = ControlFocusZone.NONE
-                    }
-                },
-                availableSubtitles = availableSubtitles,
-                availableAudioTracks = availableAudioTracks,
-                currentSpeed = currentSpeed.value,
-                currentQualityLabel = currentQualityLabel,
-                onShowSubtitleDialog = { showSubtitleDialog = true },
-                onShowAudioTrackDialog = { showAudioTrackDialog = true },
-                onShowSpeedDialog = { showSpeedDialog = true },
-                onShowQualityDialog = { showQualityDialog = true },
-                onShowEpisodeList = {
-                    showEpisodeListDialog = true
-                    lastInteractionTime = System.currentTimeMillis()
-                },
-                hasEpisodes = episodeList.isNotEmpty(),
-                // 跳过片头片尾
-                onShowSkipConfigDialog = { showSkipConfigDialog = true },
-                onSkipIntro = { viewModel.skipIntro() },
-                onSkipOutro = { viewModel.skipOutro() },
-                // 只有在自动跳过开关打开时才显示跳过按钮
-                skipIntroAvailable = autoSkipIntroOutro && skipConfig?.skipIntroEnabled == true && playerState.currentPosition < (skipConfig?.introDuration ?: 0),
-                skipOutroAvailable = autoSkipIntroOutro && skipConfig?.skipOutroEnabled == true && playerState.duration > 0 && playerState.currentPosition > (playerState.duration - (skipConfig?.outroDuration ?: 0))
-            )
+        // 底部控制栏（隐藏时直接移除，避免不可见控件残留焦点）
+        if (showControls) {
+            Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                PlayerControls(
+                    playerState = playerState,
+                    onPlayPause = { viewModel.togglePlayPause() },
+                    onSeekTo = { position -> viewModel.seekTo(position) },
+                    onSeekBackward = { viewModel.seekBackward() },
+                    onSeekForward = { viewModel.seekForward() },
+                    onSkipPrevious = { viewModel.seekToPrevious() },
+                    onSkipNext = { viewModel.seekToNext() },
+                    onUpdateInteractionTime = { lastInteractionTime = System.currentTimeMillis() },
+                    playPauseFocusRequester = playPauseFocusRequester,
+                    backButtonFocusRequester = backButtonFocusRequester,
+                    progressBarFocusRequester = progressBarFocusRequester,
+                    isLocked = false,
+                    forceProgressBubbleHighlight = controlsMode == ControlsMode.SEEK_OVERLAY,
+                    onProgressFocusChanged = { isFocused ->
+                        if (!showControls) {
+                            focusedControlZone = ControlFocusZone.NONE
+                        } else if (isFocused) {
+                            focusedControlZone = ControlFocusZone.PROGRESS
+                        } else if (focusedControlZone == ControlFocusZone.PROGRESS) {
+                            focusedControlZone = ControlFocusZone.NONE
+                        }
+                    },
+                    onBottomButtonFocusChanged = { isFocused ->
+                        if (!showControls) {
+                            focusedControlZone = ControlFocusZone.NONE
+                        } else if (isFocused) {
+                            focusedControlZone = ControlFocusZone.BOTTOM_BUTTONS
+                        } else if (focusedControlZone == ControlFocusZone.BOTTOM_BUTTONS) {
+                            focusedControlZone = ControlFocusZone.NONE
+                        }
+                    },
+                    availableSubtitles = availableSubtitles,
+                    availableAudioTracks = availableAudioTracks,
+                    currentSpeed = currentSpeed.value,
+                    currentQualityLabel = currentQualityLabel,
+                    onShowSubtitleDialog = { showSubtitleDialog = true },
+                    onShowAudioTrackDialog = { showAudioTrackDialog = true },
+                    onShowSpeedDialog = { showSpeedDialog = true },
+                    onShowQualityDialog = { showQualityDialog = true },
+                    onShowEpisodeList = {
+                        showEpisodeListDialog = true
+                        lastInteractionTime = System.currentTimeMillis()
+                    },
+                    hasEpisodes = episodeList.isNotEmpty(),
+                    // 跳过片头片尾
+                    onShowSkipConfigDialog = { showSkipConfigDialog = true },
+                    onSkipIntro = { viewModel.skipIntro() },
+                    onSkipOutro = { viewModel.skipOutro() },
+                    // 只有在自动跳过开关打开时才显示跳过按钮
+                    skipIntroAvailable = autoSkipIntroOutro && skipConfig?.skipIntroEnabled == true && playerState.currentPosition < (skipConfig?.introDuration ?: 0),
+                    skipOutroAvailable = autoSkipIntroOutro && skipConfig?.skipOutroEnabled == true && playerState.duration > 0 && playerState.currentPosition > (playerState.duration - (skipConfig?.outroDuration ?: 0))
+                )
+            }
         }
 
         // 续播提示弹窗：继续/从头（不影响后台播放）
@@ -933,9 +1025,9 @@ private fun ResumeOrRestartPromptDialog(
     onRestart: () -> Unit,
 ) {
     Dialog(
-        onDismissRequest = { /* 由3秒自动关闭或用户按钮操作关闭 */ },
+        onDismissRequest = onContinue,
         properties = DialogProperties(
-            dismissOnBackPress = false,
+            dismissOnBackPress = true,
             dismissOnClickOutside = false,
             usePlatformDefaultWidth = false
         )

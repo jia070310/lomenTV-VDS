@@ -2,6 +2,7 @@ package com.lomen.tv.ui.player
 
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -16,6 +17,7 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class PlayerActivity : ComponentActivity() {
+    private var globalKeyHandler: ((KeyEvent) -> Boolean)? = null
 
     companion object {
         const val EXTRA_VIDEO_URL = "extra_video_url"
@@ -61,11 +63,22 @@ class PlayerActivity : ComponentActivity() {
                         mediaId = mediaId,
                         episodeId = episodeId,
                         startPosition = startPosition,
-                        onBackPressed = { finish() }
+                        onBackPressed = { finish() },
+                        onRegisterGlobalKeyHandler = { handler ->
+                            globalKeyHandler = handler
+                        }
                     )
                 }
             }
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val handler = globalKeyHandler
+        if (handler != null && handler(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun installCrashProbe() {
