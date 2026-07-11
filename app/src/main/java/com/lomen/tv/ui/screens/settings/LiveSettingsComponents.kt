@@ -484,7 +484,8 @@ fun <T> HistoryListDialog(
     itemContent: @Composable (T, Boolean, Boolean) -> Pair<String, String?>,
     isBuiltInItem: (T) -> Boolean = { false }, // 判断是否为内置项
     addNewText: String = "添加其他",
-    emptyText: String = "暂无历史记录"
+    emptyText: String = "暂无历史记录",
+    deleteConfirmText: String = "确定要删除这个历史记录吗？"
 ) {
     // 删除确认弹窗状态
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -687,7 +688,7 @@ fun <T> HistoryListDialog(
             },
             text = {
                 Text(
-                    text = "确定要删除这个历史记录吗？",
+                    text = deleteConfirmText,
                     color = Color.White.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.bodyMedium
                 )

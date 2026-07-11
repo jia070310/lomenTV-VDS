@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.lomen.tv.data.local.database.LomenDatabase
 import com.lomen.tv.data.local.database.dao.EpisodeDao
+import com.lomen.tv.data.local.database.dao.FavoriteDao
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.SkipConfigDao
 import com.lomen.tv.data.local.database.dao.TmdbEpisodeDao
@@ -72,5 +73,10 @@ object DatabaseModule {
     @Provides
     fun provideTmdbSyncQueueDao(database: LomenDatabase): TmdbSyncQueueDao {
         return database.tmdbSyncQueueDao()
+    }
+
+    @Provides
+    fun provideFavoriteDao(database: LomenDatabase): FavoriteDao {
+        return database.favoriteDao()
     }
 }

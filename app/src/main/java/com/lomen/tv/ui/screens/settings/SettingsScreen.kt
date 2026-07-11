@@ -54,6 +54,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import com.lomen.tv.service.WebDavConfigServer
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -3192,7 +3193,18 @@ private fun LiveSettingsSection() {
         },
         onDeleted = { item ->
             val (_, url) = item
-            scope.launch { liveSettingsPreferences.removeLiveSourceFromHistory(url) }
+            scope.launch {
+                val isCurrentSource = url == liveSourceUrl
+                liveSettingsPreferences.removeLiveSourceFromHistory(url)
+                if (isCurrentSource) {
+                    val remaining = liveSettingsPreferences.liveSourceHistory.first()
+                        .filter { it.second != url }
+                    remaining.firstOrNull()?.let { (name, nextUrl) ->
+                        liveSettingsPreferences.setLiveSourceUrl(nextUrl)
+                        liveSettingsPreferences.addLiveSourceToHistory(name, nextUrl)
+                    }
+                }
+            }
         },
         onAddNew = {
             pendingLiveWebPushKind = LiveWebPushSuccessKind.LIVE_SOURCE
@@ -3202,10 +3214,8 @@ private fun LiveSettingsSection() {
             val (name, url) = item
             Pair(name, url)
         },
-        isBuiltInItem = { item ->
-            LiveSettingsPreferences.BUILT_IN_LIVE_SOURCES.any { it.second == item.second }
-        },
-        addNewText = "添加其他直播源"
+        addNewText = "添加其他直播源",
+        deleteConfirmText = "确定删除这个直播源吗？"
     )
     
     // 节目单历史列表弹窗
@@ -3239,7 +3249,8 @@ private fun LiveSettingsSection() {
         isBuiltInItem = { item ->
             LiveSettingsPreferences.BUILT_IN_EPG_URLS.contains(item)
         },
-        addNewText = "添加其他节目单"
+        addNewText = "添加其他节目单",
+        deleteConfirmText = "确定删除这个节目单吗？"
     )
     
     // User-Agent 历史列表弹窗
@@ -3273,7 +3284,8 @@ private fun LiveSettingsSection() {
         isBuiltInItem = { item ->
             LiveSettingsPreferences.BUILT_IN_USER_AGENTS.contains(item)
         },
-        addNewText = "添加其他 User-Agent"
+        addNewText = "添加其他 User-Agent",
+        deleteConfirmText = "确定删除这个 User-Agent 吗？"
     )
     
     // 网页配置二维码弹窗 - 在历史列表中通过"添加其他"触发

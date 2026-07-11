@@ -34,6 +34,7 @@ class LiveSettingsPreferences @Inject constructor(
         val BOOT_STARTUP = booleanPreferencesKey("boot_startup")
         val HAS_AUTO_ENTERED_LIVE = booleanPreferencesKey("has_auto_entered_live")
         val LIVE_SOURCE_HISTORY = stringPreferencesKey("live_source_history")
+        val REMOVED_BUILTIN_LIVE_SOURCES = stringPreferencesKey("removed_builtin_live_sources")
         val EPG_URL_HISTORY = stringPreferencesKey("epg_url_history")
         val USER_AGENT_HISTORY = stringPreferencesKey("user_agent_history")
         val VIDEO_ASPECT_RATIO = intPreferencesKey("video_aspect_ratio")
@@ -291,8 +292,10 @@ class LiveSettingsPreferences @Inject constructor(
                 if (parts.size == 2) parts[0] to parts[1] else null
             }.toSet()
         }
-        // 合并内置源和用户保存的源
-        BUILT_IN_LIVE_SOURCES.toSet() + savedSet
+        val removed = preferences[REMOVED_BUILTIN_LIVE_SOURCES] ?: ""
+        val removedUrls = if (removed.isEmpty()) emptySet() else removed.split("|").filter { it.isNotBlank() }.toSet()
+        val visibleBuiltIn = BUILT_IN_LIVE_SOURCES.filter { it.second !in removedUrls }.toSet()
+        visibleBuiltIn + savedSet
     }
 
     /**
@@ -323,6 +326,13 @@ class LiveSettingsPreferences @Inject constructor(
             val set = if (current.isEmpty()) mutableSetOf() else current.split("|").toMutableSet()
             set.removeAll { it.split("::", limit = 2).getOrNull(1) == url }
             preferences[LIVE_SOURCE_HISTORY] = set.joinToString("|")
+
+            if (BUILT_IN_LIVE_SOURCES.any { it.second == url }) {
+                val removed = preferences[REMOVED_BUILTIN_LIVE_SOURCES] ?: ""
+                val removedSet = if (removed.isEmpty()) mutableSetOf() else removed.split("|").toMutableSet()
+                removedSet.add(url)
+                preferences[REMOVED_BUILTIN_LIVE_SOURCES] = removedSet.joinToString("|")
+            }
         }
     }
 

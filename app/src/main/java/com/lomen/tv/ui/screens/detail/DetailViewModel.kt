@@ -19,6 +19,7 @@ import com.lomen.tv.data.scraper.TmdbScraper
 import com.lomen.tv.domain.service.TmdbMetadataSyncManager
 import com.lomen.tv.domain.model.MediaType
 import com.lomen.tv.domain.model.isLocalEpisodicSeries
+import com.lomen.tv.domain.service.FavoriteService
 import com.lomen.tv.domain.service.MetadataService
 import com.lomen.tv.domain.service.WatchHistoryService
 import com.lomen.tv.utils.FileNameParser
@@ -44,7 +45,8 @@ class DetailViewModel @Inject constructor(
     private val watchHistoryDao: WatchHistoryDao,
     private val metadataService: MetadataService,
     private val tmdbMetadataSyncManager: TmdbMetadataSyncManager,
-    private val watchHistoryService: WatchHistoryService
+    private val watchHistoryService: WatchHistoryService,
+    private val favoriteService: FavoriteService
 ) : ViewModel() {
 
     private val tmdbScraper = TmdbScraper.getInstance()
@@ -76,6 +78,9 @@ class DetailViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow<DetailUiState>(DetailUiState.Loading)
     val uiState: StateFlow<DetailUiState> = _uiState
+
+    private val _isFavorite = MutableStateFlow(false)
+    val isFavorite: StateFlow<Boolean> = _isFavorite
     
     // 当前选中的季数
     private val _selectedSeason = MutableStateFlow(1)
@@ -91,6 +96,7 @@ class DetailViewModel @Inject constructor(
     // 当前媒体 ID
     private var currentMediaId: String? = null
     private var currentMediaType: MediaType = MediaType.MOVIE
+    private var currentTmdbId: Int? = null
 
     private val _manualEditState = MutableStateFlow(ManualMetadataEditState())
     val manualEditState: StateFlow<ManualMetadataEditState> = _manualEditState
@@ -111,13 +117,20 @@ class DetailViewModel @Inject constructor(
                 episodes = filteredEpisodes,
                 media = currentState.media.copy(seasonCount = season)
             )
+            currentTmdbId?.let { tmdbId ->
+                viewModelScope.launch(Dispatchers.IO) {
+                    enrichSeasonWithTmdbMetadata(tmdbId, season)
+                }
+            }
         }
     }
 
     fun loadMediaDetail(mediaId: String) {
         viewModelScope.launch {
             _uiState.value = DetailUiState.Loading
+            _isFavorite.value = favoriteService.isFavorite(mediaId)
             currentMediaId = null
+            currentTmdbId = null
 
             try {
                 // 首先尝试从WebDavMediaDao获取数据
@@ -135,6 +148,7 @@ class DetailViewModel @Inject constructor(
                     // 记录真实媒体ID（避免把标题等非ID写入观看历史）
                     currentMediaId = webDavMedia.id
                     currentMediaType = webDavMedia.type
+                    currentTmdbId = webDavMedia.tmdbId?.toIntOrNull()
                     val isWebDavEpisodic = webDavMedia.type == MediaType.TV_SHOW ||
                         webDavMedia.type == MediaType.VARIETY ||
                         webDavMedia.type == MediaType.ANIME ||
@@ -185,7 +199,7 @@ class DetailViewModel @Inject constructor(
                                 seriesTitle = webDavMedia.title,
                                 episodeNumber = episodeNumber
                             )
-                            val stillUrl = webDavMedia.posterUrl ?: webDavMedia.backdropUrl ?: episode.posterUrl
+                            val stillUrl = episode.posterUrl
                             WebDavEpisodeDraft(
                                 entity = episode,
                                 episodeNumber = episodeNumber,
@@ -256,27 +270,8 @@ class DetailViewModel @Inject constructor(
                                 }
                             }
 
-                            // 2) 当前季：优先读本地 tmdb_episode；没有则 enqueue（后台补全单集标题/剧照/时长）
-                            val currentSeason = selectedSeason.value
-                            val cachedEpisodes = tmdbEpisodeDao.getBySeason(tmdbIdInt, currentSeason)
-                            if (cachedEpisodes.isEmpty()) {
-                                tmdbMetadataSyncManager.enqueueSeasonEpisodes(tmdbIdInt, currentSeason, priority = 1)
-                            } else {
-                                val enriched = (allEpisodesBySeason[currentSeason] ?: emptyList()).map { ep ->
-                                    val cachedEp = cachedEpisodes.firstOrNull { it.episodeNumber == ep.episodeNumber }
-                                    if (cachedEp == null) ep else ep.copy(
-                                        title = cachedEp.name ?: ep.title,
-                                        stillUrl = cachedEp.stillUrl ?: ep.stillUrl,
-                                        duration = (cachedEp.runtimeMinutes?.times(60_000L))?.takeIf { it > 0 } ?: ep.duration
-                                    )
-                                }
-                                withContext(Dispatchers.Main) {
-                                    val currentState = _uiState.value
-                                    if (currentState is DetailUiState.Success) {
-                                        _uiState.value = currentState.copy(episodes = enriched)
-                                    }
-                                }
-                            }
+                            // 2) 当前季：优先本地缓存，缺失则立即拉取 TMDB 单集封面/副标题
+                            enrichSeasonWithTmdbMetadata(tmdbIdInt, _selectedSeason.value)
                         }
                     }
                     
@@ -809,7 +804,7 @@ class DetailViewModel @Inject constructor(
         fileNameTitle: String,
         seriesTitle: String,
         episodeNumber: Int
-    ): String {
+    ): String? {
         val normalizedSeries = seriesTitle.trim()
         val parsed = parsedTitle.trim()
         val genericEpRegex = Regex("""^第\s*\d+\s*集$""")
@@ -831,17 +826,83 @@ class DetailViewModel @Inject constructor(
             .replace(Regex("""\s+"""), " ")
             .trim()
 
-        if (cleaned.isBlank()) {
-            cleaned = "第${episodeNumber}集"
+        if (cleaned.isBlank() || genericEpRegex.matches(cleaned)) {
+            return null
         }
         return cleaned
+    }
+
+    private fun isGenericEpisodeTitle(title: String?, episodeNumber: Int): Boolean {
+        val normalized = title?.trim().orEmpty()
+        if (normalized.isBlank()) return true
+        return Regex("""^第\s*$episodeNumber\s*集$""").matches(normalized)
+    }
+
+    private suspend fun enrichSeasonWithTmdbMetadata(tmdbId: Int, season: Int) {
+        var cachedEpisodes = tmdbEpisodeDao.getBySeason(tmdbId, season)
+        if (cachedEpisodes.isEmpty()) {
+            val fetched = runCatching {
+                tmdbScraper.getTvSeasonEpisodes(tmdbId.toString(), season).orEmpty()
+            }.getOrElse { emptyList() }
+            if (fetched.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                val entities = fetched.map { ep ->
+                    TmdbEpisodeEntity(
+                        tmdbId = tmdbId,
+                        seasonNumber = season,
+                        episodeNumber = ep.episodeNumber,
+                        name = ep.name.takeIf { it.isNotBlank() },
+                        overview = ep.overview?.takeIf { it.isNotBlank() },
+                        stillUrl = ep.stillUrl,
+                        airDate = ep.airDate,
+                        runtimeMinutes = ep.runtime.takeIf { it > 0 },
+                        updatedAt = now
+                    )
+                }
+                tmdbEpisodeDao.upsertAll(entities)
+                cachedEpisodes = entities
+            } else {
+                tmdbMetadataSyncManager.enqueueSeasonEpisodes(tmdbId, season, priority = 1)
+                return
+            }
+        }
+
+        val baseEpisodes = allEpisodesBySeason[season] ?: return
+        val enriched = mergeEpisodesWithTmdbMetadata(baseEpisodes, cachedEpisodes)
+        allEpisodesBySeason = allEpisodesBySeason + (season to enriched)
+
+        withContext(Dispatchers.Main) {
+            val currentState = _uiState.value
+            if (currentState is DetailUiState.Success && _selectedSeason.value == season) {
+                _uiState.value = currentState.copy(episodes = enriched)
+            }
+        }
+    }
+
+    private fun mergeEpisodesWithTmdbMetadata(
+        episodes: List<EpisodeItem>,
+        cachedEpisodes: List<TmdbEpisodeEntity>
+    ): List<EpisodeItem> {
+        return episodes.map { ep ->
+            val cachedEp = cachedEpisodes.firstOrNull { it.episodeNumber == ep.episodeNumber }
+            if (cachedEp == null) {
+                ep.copy(title = ep.title.takeUnless { isGenericEpisodeTitle(it, ep.episodeNumber) })
+            } else {
+                ep.copy(
+                    title = cachedEp.name?.takeIf { it.isNotBlank() }
+                        ?: ep.title.takeUnless { isGenericEpisodeTitle(it, ep.episodeNumber) },
+                    stillUrl = cachedEp.stillUrl ?: ep.stillUrl,
+                    duration = (cachedEp.runtimeMinutes?.times(60_000L))?.takeIf { it > 0 } ?: ep.duration
+                )
+            }
+        }
     }
 
     private data class WebDavEpisodeDraft(
         val entity: WebDavMediaEntity,
         val episodeNumber: Int,
         val seasonNumber: Int,
-        val episodeTitle: String,
+        val episodeTitle: String?,
         val stillUrl: String?,
         val duration: Long
     )
@@ -909,6 +970,25 @@ class DetailViewModel @Inject constructor(
             } else {
                 tmdbMetadataSyncManager.enqueueSeasonEpisodes(tmdbId, season, priority = 1)
             }
+        }
+    }
+
+    fun toggleFavorite() {
+        val currentState = _uiState.value as? DetailUiState.Success ?: return
+        val media = currentState.media
+        viewModelScope.launch {
+            val isNowFavorite = favoriteService.toggleFavorite(
+                mediaId = media.id,
+                title = media.title,
+                posterUrl = media.posterUrl,
+                backdropUrl = media.backdropUrl,
+                overview = media.overview,
+                year = media.year,
+                genres = media.genres,
+                mediaType = media.type,
+                rating = media.rating
+            )
+            _isFavorite.value = isNowFavorite
         }
     }
 }

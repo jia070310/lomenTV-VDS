@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.LocalFireDepartment
@@ -184,6 +185,7 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToCategory: (com.lomen.tv.domain.model.MediaType) -> Unit = {},
     onNavigateToRecentWatching: () -> Unit = {},
+    onNavigateToFavorites: () -> Unit = {},
     onNavigateToLive: () -> Unit = {},
     onPlayFromHistory: (com.lomen.tv.domain.service.WatchHistoryItem) -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
@@ -360,7 +362,7 @@ fun HomeScreen(
     val mediaRowFocusRequesters = remember(mediaRowSpecs) {
         mediaRowSpecs.map { itemCount -> List(itemCount) { FocusRequester() } }
     }
-    val headerFocusRequesters = remember { List(3) { FocusRequester() } }
+    val headerFocusRequesters = remember { List(4) { FocusRequester() } }
 
     LaunchedEffect(Unit) {
         delay(100)
@@ -480,6 +482,7 @@ fun HomeScreen(
             item {
                 HomeHeader(
                     onSearchClick = onNavigateToSearch,
+                    onFavoritesClick = onNavigateToFavorites,
                     onRefreshClick = {
                         // 触发增量刷剥
                         val library = resourceLibraryViewModel.getCurrentLibrary()
@@ -494,7 +497,7 @@ fun HomeScreen(
                     headerFocusRequesters = headerFocusRequesters,
                     fallbackContentFocusRequester = contentFocusRequester,
                     bottomNavigationFirstTabFocusRequester = bottomBarFirstTabFocusRequester,
-                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                     showVersionUpdateBadge = showVersionBadgeOverlay,
                     versionUpdateBadgeFocusRequester = versionUpdateBadgeFocusRequester
                 )
@@ -517,7 +520,7 @@ fun HomeScreen(
                         currentRowFocusRequesters = rowFocusRequesters.getOrNull(rowIndexCursor),
                         headerFocusRequesters = headerFocusRequesters,
                         isFirstContentRow = rowIndexCursor == 0,
-                        onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                        onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                         showTopVersionBadge = showVersionBadgeOverlay,
                         topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester
                     )
@@ -547,7 +550,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -577,7 +580,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -607,7 +610,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -637,7 +640,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -667,7 +670,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -697,7 +700,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -727,7 +730,7 @@ fun HomeScreen(
                                     currentRowFocusRequesters = mediaRowFocusRequesters.getOrNull(mediaRowIndexCursor),
                                     headerFocusRequesters = headerFocusRequesters,
                                     isFirstContentRow = rowIndexCursor == 0,
-                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 2) },
+                                    onFocusedColumnChanged = { focusedColumnIndex = it.coerceIn(0, 3) },
                                     showTopVersionBadge = showVersionBadgeOverlay,
                                     topVersionBadgeFocusRequester = versionUpdateBadgeFocusRequester,
                                     resetToStartNonce = homeRowResetNonce,
@@ -906,6 +909,7 @@ fun HomeScreen(
 @Composable
 private fun HomeHeader(
     onSearchClick: () -> Unit,
+    onFavoritesClick: () -> Unit,
     onRefreshClick: () -> Unit,
     syncState: com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState = com.lomen.tv.ui.viewmodel.MediaSyncViewModel.SyncState.Idle,
     syncProgress: Pair<Int, Int> = 0 to 0,
@@ -1057,6 +1061,42 @@ private fun HomeHeader(
 
             Spacer(modifier = Modifier.width(16.dp))
 
+            // 收藏按钮
+            IconButton(
+                onClick = onFavoritesClick,
+                colors = IconButtonDefaults.colors(
+                    containerColor = Color.Transparent,
+                    contentColor = TextSecondary,
+                    focusedContainerColor = PrimaryYellow,
+                    focusedContentColor = BackgroundDark
+                ),
+                modifier = Modifier
+                    .focusRequester(headerFocusRequesters[2])
+                    .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(2) }
+                    .onPreviewKeyEvent { keyEvent ->
+                        if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
+                            if (hasContentRowBelow) {
+                                requestFirstAvailableFocus(
+                                    firstRowFocusRequesters?.getOrNull(0),
+                                    fallbackContentFocusRequester
+                                )
+                            } else {
+                                bottomNavigationFirstTabFocusRequester.tryRequestFocus()
+                            }
+                        } else {
+                            false
+                        }
+                    }
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = "收藏",
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
             // User Avatar
             IconButton(
                 onClick = { /* User profile action */ },
@@ -1067,8 +1107,8 @@ private fun HomeHeader(
                     focusedContentColor = BackgroundDark
                 ),
                 modifier = Modifier
-                    .focusRequester(headerFocusRequesters[2])
-                    .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(2) }
+                    .focusRequester(headerFocusRequesters[3])
+                    .onFocusChanged { if (it.isFocused) onFocusedColumnChanged(3) }
                     .onPreviewKeyEvent { keyEvent ->
                         if (keyEvent.key == Key.DirectionDown && keyEvent.type == KeyEventType.KeyDown) {
                             if (hasContentRowBelow) {

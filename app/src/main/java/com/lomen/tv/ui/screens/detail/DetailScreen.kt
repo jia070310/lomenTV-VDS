@@ -34,6 +34,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
@@ -116,6 +118,7 @@ fun DetailScreen(
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isFavorite by viewModel.isFavorite.collectAsState()
     val selectedSeason by viewModel.selectedSeason.collectAsState()
     val availableSeasons by viewModel.availableSeasons.collectAsState()
     val manualEditState by viewModel.manualEditState.collectAsState()
@@ -174,6 +177,7 @@ fun DetailScreen(
                     cast = state.cast,
                     selectedSeason = selectedSeason,
                     availableSeasons = availableSeasons,
+                    isFavorite = isFavorite,
                     onSeasonSelected = { viewModel.selectSeason(it) },
                     onManualEditClick = {
                         showManualDialog = true
@@ -181,6 +185,7 @@ fun DetailScreen(
                     },
                     onNavigateBack = onNavigateBack,
                     onPlayClick = onPlayClick,
+                    onToggleFavorite = { viewModel.toggleFavorite() },
                     viewModel = viewModel
                 )
             }
@@ -209,13 +214,24 @@ private fun DetailContent(
     cast: List<CastItem>,
     selectedSeason: Int,
     availableSeasons: List<Int>,
+    isFavorite: Boolean,
     onSeasonSelected: (Int) -> Unit,
     onManualEditClick: () -> Unit,
     onNavigateBack: () -> Unit,
     onPlayClick: (videoUrl: String, title: String, episodeTitle: String?, mediaId: String, episodeId: String?, startPosition: Long) -> Unit,
+    onToggleFavorite: () -> Unit,
     viewModel: DetailViewModel
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    var focusedEpisodePath by remember(episodes) {
+        mutableStateOf(
+            if (media.type.usesEpisodeDetailLayout() && episodes.isNotEmpty()) {
+                episodes.sortedBy { it.episodeNumber }.firstOrNull()?.path
+            } else {
+                media.path
+            }
+        )
+    }
     val tabs = if (media.type.usesEpisodeDetailLayout()) {
         listOf("剧集", "简介", "演职人员")
     } else {
@@ -234,10 +250,12 @@ private fun DetailContent(
                 episodes = episodes,
                 selectedSeason = selectedSeason,
                 availableSeasons = availableSeasons,
+                isFavorite = isFavorite,
                 currentTabFocusRequester = activeTabFocusRequester,
                 onSeasonSelected = onSeasonSelected,
                 onManualEditClick = onManualEditClick,
                 onNavigateBack = onNavigateBack,
+                onToggleFavorite = onToggleFavorite,
                 onPlayClick = {
                     // 立即播放按钮：根据观看历史决定播放位置
                     CoroutineScope(Dispatchers.Main).launch {
@@ -301,6 +319,9 @@ private fun DetailContent(
                             episodes = episodes,
                             totalEpisodes = media.totalEpisodes,
                             tabFocusRequester = activeTabFocusRequester,
+                            onEpisodeFocus = { episode ->
+                                focusedEpisodePath = episode.path
+                            },
                             onEpisodeClick = { episode ->
                                 // 点击剧集时，获取该集的观看历史
                                 CoroutineScope(Dispatchers.Main).launch {
@@ -365,7 +386,11 @@ private fun DetailContent(
         // Path Information Section
         item {
             PathInformationSection(
-                mediaPath = media.path
+                mediaPath = if (media.type.usesEpisodeDetailLayout()) {
+                    focusedEpisodePath
+                } else {
+                    media.path
+                }
             )
         }
 
@@ -383,10 +408,12 @@ private fun HeroSection(
     episodes: List<EpisodeItem>,
     selectedSeason: Int,
     availableSeasons: List<Int>,
+    isFavorite: Boolean,
     currentTabFocusRequester: FocusRequester,
     onSeasonSelected: (Int) -> Unit,
     onManualEditClick: () -> Unit,
     onNavigateBack: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onPlayClick: () -> Unit
 ) {
     // 季数下拉菜单状态
@@ -571,6 +598,35 @@ private fun HeroSection(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "立即播放",
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                color = Color.Unspecified
+                            )
+                        )
+                    }
+
+                    Button(
+                        onClick = onToggleFavorite,
+                        colors = ButtonDefaults.colors(
+                            containerColor = SurfaceDark.copy(alpha = 0.8f),
+                            contentColor = if (isFavorite) PrimaryYellow else TextPrimary,
+                            focusedContainerColor = PrimaryYellow,
+                            focusedContentColor = Color.Black,
+                            pressedContainerColor = PrimaryYellow,
+                            pressedContentColor = Color.Black
+                        ),
+                        shape = ButtonDefaults.shape(shape = RoundedCornerShape(24.dp)),
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isFavorite) "已收藏" else "收藏",
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                                 color = Color.Unspecified
@@ -897,6 +953,7 @@ private fun EpisodesSection(
     episodes: List<EpisodeItem>,
     totalEpisodes: Int?,  // 总集数
     tabFocusRequester: FocusRequester,
+    onEpisodeFocus: (EpisodeItem) -> Unit,
     onEpisodeClick: (EpisodeItem) -> Unit
 ) {
     Column(
@@ -946,6 +1003,7 @@ private fun EpisodesSection(
                 EpisodeCard(
                     episode = it,
                     tabFocusRequester = tabFocusRequester,
+                    onFocus = { onEpisodeFocus(it) },
                     onClick = { onEpisodeClick(it) }
                 )
             }
@@ -958,6 +1016,7 @@ private fun EpisodesSection(
 private fun EpisodeCard(
     episode: EpisodeItem,
     tabFocusRequester: FocusRequester,
+    onFocus: () -> Unit,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -973,7 +1032,12 @@ private fun EpisodeCard(
                 .focusProperties {
                     up = tabFocusRequester
                 }
-                .onFocusChanged { isFocused = it.isFocused },
+                .onFocusChanged { focusState ->
+                    isFocused = focusState.isFocused
+                    if (focusState.isFocused) {
+                        onFocus()
+                    }
+                },
             colors = CardDefaults.colors(
                 containerColor = SurfaceDark,
                 focusedContainerColor = PrimaryYellow.copy(alpha = 0.2f),
@@ -1100,7 +1164,7 @@ private fun EpisodeCard(
                 .width(300.dp)
         )
         Text(
-            text = episode.title ?: "",
+            text = episodeSubtitle(episode),
             style = MaterialTheme.typography.labelMedium,
             color = TextSecondary,
             maxLines = 1,
@@ -1110,6 +1174,13 @@ private fun EpisodeCard(
                 .width(300.dp)
         )
     }
+}
+
+private fun episodeSubtitle(episode: EpisodeItem): String {
+    val title = episode.title?.trim().orEmpty()
+    if (title.isBlank()) return ""
+    if (Regex("""^第\s*${episode.episodeNumber}\s*集$""").matches(title)) return ""
+    return title
 }
 
 private fun formatWatchedTime(ms: Long): String {

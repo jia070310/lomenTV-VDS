@@ -20,6 +20,7 @@ import com.lomen.tv.domain.model.MediaType
 import com.lomen.tv.ui.player.PlayerActivity
 import com.lomen.tv.ui.screens.category.CategoryScreen
 import com.lomen.tv.ui.screens.detail.DetailScreen
+import com.lomen.tv.ui.screens.favorites.FavoritesScreen
 import com.lomen.tv.ui.screens.home.HomeScreen
 import com.lomen.tv.ui.screens.home.HomeViewModel
 import com.lomen.tv.ui.screens.home.ResourceLibraryScreen
@@ -63,6 +64,7 @@ sealed class Screen(val route: String) {
         fun createRoute(mediaType: MediaType) = "category/${mediaType.name}"
     }
     data object RecentWatching : Screen("recent_watching")
+    data object Favorites : Screen("favorites")
     data object Live : Screen("live")
 }
 
@@ -140,6 +142,9 @@ fun LomenTVNavigation(
                 },
                 onNavigateToRecentWatching = {
                     navController.navigate(Screen.RecentWatching.route)
+                },
+                onNavigateToFavorites = {
+                    navController.navigate(Screen.Favorites.route)
                 },
                 onNavigateToLive = {
                     navController.navigate(Screen.Live.route)
@@ -331,6 +336,15 @@ fun LomenTVNavigation(
                 }
             )
         }
+
+            composable(Screen.Favorites.route) {
+                FavoritesScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToDetail = { mediaId ->
+                        navController.navigate(Screen.Detail.createRoute(mediaId))
+                    }
+                )
+            }
 
             composable(Screen.Live.route) {
             LiveScreen(

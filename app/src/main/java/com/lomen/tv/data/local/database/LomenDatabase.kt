@@ -4,6 +4,7 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.lomen.tv.data.local.database.dao.EpisodeDao
+import com.lomen.tv.data.local.database.dao.FavoriteDao
 import com.lomen.tv.data.local.database.dao.MovieDao
 import com.lomen.tv.data.local.database.dao.SkipConfigDao
 import com.lomen.tv.data.local.database.dao.TmdbEpisodeDao
@@ -12,6 +13,7 @@ import com.lomen.tv.data.local.database.dao.TmdbSyncQueueDao
 import com.lomen.tv.data.local.database.dao.WatchHistoryDao
 import com.lomen.tv.data.local.database.dao.WebDavMediaDao
 import com.lomen.tv.data.local.database.entity.EpisodeEntity
+import com.lomen.tv.data.local.database.entity.FavoriteEntity
 import com.lomen.tv.data.local.database.entity.MovieEntity
 import com.lomen.tv.data.local.database.entity.SkipConfigEntity
 import com.lomen.tv.data.local.database.entity.TmdbEpisodeEntity
@@ -29,9 +31,10 @@ import com.lomen.tv.data.local.database.entity.WebDavMediaEntity
         SkipConfigEntity::class,
         TmdbMediaEntity::class,
         TmdbEpisodeEntity::class,
-        TmdbSyncQueueEntity::class
+        TmdbSyncQueueEntity::class,
+        FavoriteEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -44,4 +47,5 @@ abstract class LomenDatabase : RoomDatabase() {
     abstract fun tmdbMediaDao(): TmdbMediaDao
     abstract fun tmdbEpisodeDao(): TmdbEpisodeDao
     abstract fun tmdbSyncQueueDao(): TmdbSyncQueueDao
+    abstract fun favoriteDao(): FavoriteDao
 }
